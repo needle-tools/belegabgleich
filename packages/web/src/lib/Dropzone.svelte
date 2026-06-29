@@ -358,24 +358,28 @@
     max-height: 240px;
     overflow: auto;
     padding-right: 12px; /* keep the rows clear of the scrollbar */
-    /* slim, on-brand scrollbar instead of the chunky default */
+    /* slim, on-brand scrollbar with a visible track */
     scrollbar-width: thin;
-    scrollbar-color: var(--border-strong) transparent;
+    scrollbar-color: var(--border-strong) var(--surface-panel-muted);
   }
   .dz-files-body::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 12px;
+    height: 12px;
   }
   .dz-files-body::-webkit-scrollbar-track {
-    background: transparent;
+    background: var(--surface-panel-muted);
+    border-radius: 999px;
   }
   .dz-files-body::-webkit-scrollbar-thumb {
     background: var(--border-strong);
     border-radius: 999px;
-    border: 2px solid var(--surface-panel);
+    border: 3px solid var(--surface-panel-muted);
   }
   .dz-files-body::-webkit-scrollbar-thumb:hover {
     background: var(--text-muted);
+  }
+  .dz-files-body::-webkit-scrollbar-button {
+    display: none;
   }
   .dz-table {
     width: 100%;
