@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Belegabgleich gleicht deinen Kontoauszug oder deine Kreditkartenabrechnung gegen deine Belege ab: finde fehlende Belege, weise sie der richtigen Buchung zu und benenne sie automatisch ordentlich. Keine Buchung ohne Beleg. 100 % lokal, kein Upload."
+    />
+    <link rel="canonical" href="https://belegabgleich.de/" />
+    <meta name="theme-color" content="#0a0a0a" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Belegabgleich" />
+    <meta property="og:locale" content="de_DE" />
+    <meta property="og:url" content="https://belegabgleich.de/" />
+    <meta property="og:title" content="Belegabgleich — Belege finden, zuweisen & automatisch benennen" />
+    <meta
+      property="og:description"
+      content="Kontoauszug oder Kreditkartenabrechnung gegen deine Belege abgleichen: fehlende Belege finden, der richtigen Buchung zuweisen und automatisch ordentlich benennen. Keine Buchung ohne Beleg. 100 % lokal, kein Upload."
+    />
+    <meta property="og:image" content="https://belegabgleich.de/og.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Belegabgleich — Kaktus-Maskottchen ordnet Belege am Schreibtisch" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Belegabgleich — Belege finden, zuweisen & automatisch benennen" />
+    <meta
+      name="twitter:description"
+      content="Kontoauszug gegen deine Belege abgleichen: fehlende Belege finden, zuweisen und automatisch ordentlich benennen. Keine Buchung ohne Beleg. 100 % lokal."
+    />
+    <meta name="twitter:image" content="https://belegabgleich.de/og.jpg" />
+
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="stylesheet" href="/brand.css" />
+    <title>Belegabgleich — Belege finden, zuweisen & automatisch benennen</title>
+
+    <!-- FAQ structured data for Google rich results & AI answer engines -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Wie finde ich heraus, für welche Buchung ein Beleg fehlt?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Lade deinen Sparkassen-Kontoauszug oder deine Kreditkartenabrechnung und einen Ordner mit deinen Rechnungen. Belegabgleich vergleicht jede Buchung mit deinen Belegen und zeigt sofort, zu welcher Abbuchung noch keine Rechnung vorliegt." }
+          },
+          {
+            "@type": "Question",
+            "name": "Mein Steuerberater fragt nach fehlenden Belegen — wie sammle ich sie schnell?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Belegabgleich listet genau die Buchungen ohne Beleg auf und verlinkt für viele Anbieter direkt die Rechnungsseite. So lädst du gezielt nur die fehlenden Rechnungen herunter, statt alles manuell zu prüfen." }
+          },
+          {
+            "@type": "Question",
+            "name": "Werden meine Kontoauszüge oder Bankdaten hochgeladen?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Nein. Belegabgleich läuft zu 100 % lokal in deinem Browser. Deine Auszüge und Rechnungen verlassen den Rechner nicht — es gibt kein Backend und keine Cloud-KI." }
+          },
+          {
+            "@type": "Question",
+            "name": "Welche Banken werden unterstützt?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Aktuell Kontoauszüge und Kreditkartenabrechnungen der Sparkasse als PDF. Weitere Banken lassen sich über quelloffene Parser ergänzen." }
+          },
+          {
+            "@type": "Question",
+            "name": "Was kostet Belegabgleich?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Nichts. Belegabgleich ist kostenlos und Open Source." }
+          },
+          {
+            "@type": "Question",
+            "name": "Kann ich die fehlenden Belege als Liste exportieren?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Ja, du kannst den Bericht als CSV exportieren — praktisch für die Buchhaltung oder den Steuerberater." }
+          },
+          {
+            "@type": "Question",
+            "name": "Kann Belegabgleich meine Belege automatisch umbenennen?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Ja. Auf Wunsch benennt Belegabgleich deine Rechnungen einheitlich um (z. B. Datum_Anbieter_Betrag)." }
+          }
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

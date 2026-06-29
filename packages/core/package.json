@@ -1,0 +1,16 @@
+{
+  "name": "@kah/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure, isomorphic naming + matching engine for Belegabgleich (no Node/DOM/bank-format knowledge).",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  }
+}

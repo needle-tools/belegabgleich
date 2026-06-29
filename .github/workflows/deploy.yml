@@ -1,0 +1,44 @@
+name: Deploy to Needle Cloud
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Allow only one concurrent deployment, cancelling in-progress runs.
+concurrency:
+  group: needle-cloud-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web
+        run: npm run build
+
+      - name: Deploy to Needle Cloud
+        id: deploy
+        uses: needle-tools/deploy-to-needle-cloud-action@v1
+        with:
+          token: ${{ secrets.NEEDLE_CLOUD_TOKEN }}
+          name: kontoauszugs-helfer
+          dir: ./packages/web/dist
+
+      - name: Display deployment URL
+        run: |
+          echo "::notice title=Deployment URL::Deployed to ${{ steps.deploy.outputs.url }}"
+          echo "## 🚀 Deployed to Needle Cloud" >> "$GITHUB_STEP_SUMMARY"
+          echo "**URL:** [${{ steps.deploy.outputs.url }}](${{ steps.deploy.outputs.url }})" >> "$GITHUB_STEP_SUMMARY"

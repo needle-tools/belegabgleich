@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# Local env (e.g. VITE_RYBBIT_SITE_ID) — never commit
+.env
+.env.local
+.env.*.local
+
+# never commit real documents or local test fixtures (may contain personal data)
+sample/
+*.pdf
+*.zip
+
+# …except synthetic, authored fixtures (placeholder data only)
+!packages/**/fixtures/**
+
+# …and the fabricated demo statements + invoices shipped with the web app (no real data)
+!packages/web/public/demo/
+!packages/web/public/demo/**

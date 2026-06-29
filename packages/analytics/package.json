@@ -1,0 +1,13 @@
+{
+  "name": "@kah/analytics",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Privacy-first usage analytics (Rybbit) for Belegabgleich — usage signals only, never sensitive data.",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

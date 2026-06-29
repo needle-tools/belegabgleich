@@ -1,0 +1,19 @@
+{
+  "name": "@kah/parsers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pluggable bank-statement parsers for Belegabgleich (Sparkasse only, for now).",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@kah/core": "*"
+  }
+}

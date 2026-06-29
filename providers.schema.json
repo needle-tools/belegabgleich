@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "kontoauszugs-helfer providers",
+  "type": "object",
+  "required": ["providers"],
+  "properties": {
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "aliases"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "description": "Canonical brand name shown in the UI." },
+          "aliases": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Lowercase substrings matched against the statement merchant string."
+          },
+          "invoiceUrl": {
+            "type": "string",
+            "description": "Public page to download this vendor's invoices. Generic billing page only — never an account-specific URL."
+          }
+        }
+      }
+    }
+  }
+}
