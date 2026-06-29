@@ -93,6 +93,16 @@
     if (input.files) emit(await withCollecting(() => collectFromFileList(input.files!, (n) => (found = n))));
     input.value = ""; // allow re-picking the same files
   }
+
+  /** Open a read invoice's PDF in a new tab from its in-memory bytes (local only,
+   *  no upload). Only available for freshly-loaded invoices — a session restore
+   *  keeps the row but not the bytes. */
+  function openPdf(pdf?: CollectedPdf) {
+    if (!pdf?.data) return;
+    const url = URL.createObjectURL(new Blob([pdf.data], { type: "application/pdf" }));
+    window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
 </script>
 
 <section
@@ -157,7 +167,16 @@
                 <tr><td class="dz-td-file">{baseName(f)}</td><td><span class="dz-pill stmt">Auszug</span></td></tr>
               {/each}
               {#each result.invoices as inv}
-                <tr><td class="dz-td-file">{baseName(inv.row.rel)}</td><td><span class="dz-pill inv">Rechnung</span></td></tr>
+                <tr>
+                  <td class="dz-td-file">
+                    {#if inv.pdf?.data}
+                      <button type="button" class="dz-file-link" title="PDF öffnen" onclick={() => openPdf(inv.pdf)}>{baseName(inv.row.rel)}</button>
+                    {:else}
+                      {baseName(inv.row.rel)}
+                    {/if}
+                  </td>
+                  <td><span class="dz-pill inv">Rechnung</span></td>
+                </tr>
               {/each}
               {#each result.emptyPdfs as f}
                 <tr><td class="dz-td-file">{baseName(f)}</td><td><span class="dz-pill skip">ohne Text</span></td></tr>
@@ -338,6 +357,7 @@
     margin-top: 10px;
     max-height: 240px;
     overflow: auto;
+    padding-right: 12px; /* keep the rows clear of the scrollbar */
     /* slim, on-brand scrollbar instead of the chunky default */
     scrollbar-width: thin;
     scrollbar-color: var(--border-strong) transparent;
@@ -372,6 +392,20 @@
     color: var(--text-primary);
     word-break: break-all;
     font-variant-numeric: tabular-nums;
+  }
+  .dz-file-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+    word-break: break-all;
+  }
+  .dz-file-link:hover {
+    color: var(--accent-brand-deep);
+    text-decoration: underline;
   }
   .dz-table td:last-child {
     width: 1%;
