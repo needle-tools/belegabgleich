@@ -39,11 +39,22 @@ function withStore<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRe
  * out also avoids a DataCloneError and bloating IndexedDB with every PDF.
  */
 function toStorable(result: RunResult): RunResult {
-  return {
-    ...result,
-    invoices: result.invoices.map((i) => ({ row: i.row })), // strip pdf bytes/handle
+  const lite = {
+    entries: result.entries,
+    statements: result.statements,
+    statementFiles: result.statementFiles ?? [],
+    parserIds: result.parserIds,
+    period: result.period,
+    invoiceCount: result.invoiceCount,
+    emptyPdfs: result.emptyPdfs,
     renames: [], // bytes/handles can't survive the clone; recomputed on next run
+    charges: result.charges,
+    invoices: result.invoices.map((i) => ({ row: i.row })), // strip pdf bytes/handle
   };
+  // Belt-and-suspenders: a JSON round-trip guarantees the value is
+  // structured-cloneable for IndexedDB — anything unexpected/non-serializable is
+  // dropped rather than throwing a DataCloneError. All fields above are plain JSON.
+  return JSON.parse(JSON.stringify(lite)) as RunResult;
 }
 
 /** Persist the current run. Best-effort: never throws (e.g. private mode / quota). */
