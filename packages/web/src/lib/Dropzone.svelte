@@ -364,12 +364,12 @@
   }
   .dz-table td {
     padding: 6px 4px;
-    border-bottom: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-strong);
     vertical-align: middle;
   }
   .dz-table tr:last-child td { border-bottom: 0; }
   .dz-td-file {
-    color: var(--text-secondary);
+    color: var(--text-primary);
     word-break: break-all;
     font-variant-numeric: tabular-nums;
   }
@@ -386,9 +386,9 @@
     font-size: 0.72rem;
     font-weight: 700;
   }
-  .dz-pill.stmt { background: var(--surface-callout-info); color: var(--text-link); }
-  .dz-pill.inv { background: var(--surface-callout-success); color: var(--text-success); }
-  .dz-pill.skip { background: var(--surface-panel-muted); color: var(--text-muted); }
+  .dz-pill.stmt { background: var(--accent-tertiary); color: var(--text-inverse); }
+  .dz-pill.inv { background: var(--accent-brand-deep); color: var(--text-inverse); }
+  .dz-pill.skip { background: var(--text-muted); color: var(--text-inverse); }
 
   .dz-found {
     margin: 2px 0 0;
