@@ -298,7 +298,7 @@
         </p>
       </div>
 
-      <aside class="hero-card">
+      <a class="hero-card" href="#report" aria-label="Zum Bericht springen">
         <div class="hero-card-head">
           <span class="status-strip-label">Belegquote</span>
           <span class="period">{period}</span>
@@ -307,7 +307,7 @@
         <p class="hero-card-foot">
           {summary.missing} von {summary.total} Buchungen ohne Beleg
         </p>
-      </aside>
+      </a>
     </section>
 
     <!-- UPLOAD -->
@@ -599,7 +599,7 @@
     color: var(--text-muted);
     transition: color 0.15s ease, background-color 0.15s ease, scale 0.12s ease;
   }
-  .ghicon svg { width: 20px; height: 20px; fill: currentColor; }
+  .ghicon svg { width: 17px; height: 17px; fill: currentColor; display: block; }
   .ghicon:hover { color: var(--text-primary); background: var(--surface-panel-muted); }
   .ghicon:active { scale: 0.94; }
 
@@ -701,6 +701,20 @@
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-panel);
     box-shadow: var(--shadow-panel);
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+    transition: box-shadow 0.18s ease, transform 0.18s ease, border-color 0.18s ease;
+  }
+  .hero-card:hover {
+    box-shadow: var(--shadow-floating);
+    border-color: var(--border-strong);
+    transform: translateY(-2px);
+  }
+  .hero-card:active { transform: translateY(0); }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-card { transition: none; }
+    .hero-card:hover { transform: none; }
   }
   .hero-card-head {
     width: 100%;
