@@ -316,7 +316,7 @@
   /* read-files disclosure */
   .dz-files {
     margin: 12px 0 0;
-    width: min(520px, 100%);
+    width: 100%;
     text-align: left;
   }
   .dz-files > summary {
@@ -338,6 +338,24 @@
     margin-top: 10px;
     max-height: 240px;
     overflow: auto;
+    /* slim, on-brand scrollbar instead of the chunky default */
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .dz-files-body::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .dz-files-body::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .dz-files-body::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 999px;
+    border: 2px solid var(--surface-panel);
+  }
+  .dz-files-body::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
   }
   .dz-table {
     width: 100%;
