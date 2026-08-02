@@ -25,6 +25,21 @@ import type { RenamePlan } from "./rename";
  *  heavy), so it's optional — a restored invoice can still be re-matched by row. */
 export type InvoiceItem = { row: Row; pdf?: CollectedPdf };
 
+/**
+ * One loaded statement PDF, with the charges it contributed.
+ *
+ * Keeping charges attributed to the file they came from is what makes removing a
+ * single document possible: {@link removeDocument} drops the source and rebuilds
+ * from the rest, with no re-reading of any PDF.
+ */
+export type StatementSource = {
+  rel: string;
+  /** "Kontoauszug", "VISA-Abrechnung", … */
+  label: string;
+  parserId: string;
+  charges: Charge[];
+};
+
 export type RunResult = {
   entries: ReportEntry[];
   /** Friendly label per detected statement, e.g. "Kontoauszug", "VISA-Abrechnung". */
@@ -36,6 +51,10 @@ export type RunResult = {
   invoiceCount: number;
   /** Display paths of the detected statement PDFs (e.g. "10/Konto_…-Auszug.pdf"). */
   statementFiles: string[];
+  /** The statements with their own charges, so one can be removed on its own.
+   *  Absent on sessions restored from before this existed — the UI then simply
+   *  offers no remove button for statements rather than guessing provenance. */
+  statementSources?: StatementSource[];
   /** PDFs whose bytes had no extractable text (likely scans needing OCR). */
   emptyPdfs: string[];
   /** Invoices that can be renamed to the canonical schema (current ≠ proposed). */
@@ -125,6 +144,7 @@ function assemble(
   statementFiles: string[],
   parserIds: string[],
   emptyPdfs: string[],
+  statementSources?: StatementSource[],
 ): RunResult {
   const deduped = dedupeCharges(charges);
   const rows = invoices.map((i) => i.row);
@@ -152,6 +172,7 @@ function assemble(
     entries: buildReport(match),
     statements: [...new Set(statements)],
     statementFiles: [...new Set(statementFiles)],
+    statementSources,
     parserIds,
     period: dominantPeriod(deduped),
     invoiceCount: rows.length,
@@ -167,10 +188,7 @@ function assemble(
 export async function run(pdfs: CollectedPdf[], onProgress?: OnProgress): Promise<RunResult> {
   configureProviderAliases();
 
-  const charges: Charge[] = [];
-  const statements: string[] = [];
-  const statementFiles: string[] = [];
-  const parserIds = new Set<string>();
+  const sources: StatementSource[] = [];
   const invoices: InvoiceItem[] = [];
   const emptyPdfs: string[] = [];
 
@@ -178,10 +196,9 @@ export async function run(pdfs: CollectedPdf[], onProgress?: OnProgress): Promis
     const pdf = pdfs[i];
     const p = await parsePdf(pdf);
     if (p.kind === "statement") {
-      charges.push(...p.charges);
-      statements.push(p.label);
-      statementFiles.push(p.rel);
-      parserIds.add(p.parserId);
+      if (!sources.some((s) => s.rel === p.rel)) {
+        sources.push({ rel: p.rel, label: p.label, parserId: p.parserId, charges: p.charges });
+      }
     } else if (p.kind === "invoice") {
       invoices.push(p.item);
     } else {
@@ -190,12 +207,53 @@ export async function run(pdfs: CollectedPdf[], onProgress?: OnProgress): Promis
     onProgress?.({ done: i + 1, total: pdfs.length, name: pdf.rel });
   }
 
-  if (!statements.length) {
+  if (!sources.length) {
     const err: RunError = { code: "no_statement", invoiceCount: invoices.length };
     throw err;
   }
 
-  return assemble(charges, invoices, statements, statementFiles, [...parserIds], emptyPdfs);
+  return fromSources(sources, invoices, emptyPdfs);
+}
+
+/** Assemble from attributed statement sources — the path that supports removal. */
+function fromSources(
+  sources: StatementSource[],
+  invoices: InvoiceItem[],
+  emptyPdfs: string[],
+): RunResult {
+  return assemble(
+    sources.flatMap((s) => s.charges),
+    invoices,
+    sources.map((s) => s.label),
+    sources.map((s) => s.rel),
+    [...new Set(sources.map((s) => s.parserId))],
+    emptyPdfs,
+    sources,
+  );
+}
+
+/**
+ * Remove one loaded document and everything it brought with it, without
+ * re-reading any PDF.
+ *
+ * Removing a statement drops the charges it contributed, so its bookings leave
+ * the report. Removing an invoice un-matches whatever it covered, so those
+ * bookings show up as missing again. Returns null when the last statement is
+ * removed — there is nothing left to reconcile against, and the caller should
+ * fall back to a full reset.
+ */
+export function removeDocument(prev: RunResult, rel: string): RunResult | null {
+  // Re-matching happens here, so the aliases must be in place. run()/addInvoices()
+  // normally did that already, but a session restored from IndexedDB can reach
+  // this without either having run in this page load.
+  configureProviderAliases();
+
+  const sources = (prev.statementSources ?? []).filter((s) => s.rel !== rel);
+  const invoices = (prev.invoices ?? []).filter((i) => i.row.rel !== rel);
+  const emptyPdfs = (prev.emptyPdfs ?? []).filter((e) => e !== rel);
+
+  if (!sources.length) return null;
+  return fromSources(sources, invoices, emptyPdfs);
 }
 
 /**
@@ -212,22 +270,35 @@ export async function addInvoices(
 ): Promise<RunResult> {
   configureProviderAliases();
 
-  const charges: Charge[] = [...(prev.charges ?? [])];
   const invoices: InvoiceItem[] = [...(prev.invoices ?? [])];
   const seen = new Set(invoices.map((i) => i.row.rel));
-  const statements = [...prev.statements];
-  const statementFiles = [...(prev.statementFiles ?? [])];
-  const parserIds = new Set(prev.parserIds);
   const emptyPdfs = [...prev.emptyPdfs];
+
+  // Sessions stored before statements carried their own charges have no sources
+  // to extend. Those keep the old flattened path (and no per-statement removal);
+  // everything loaded in this session goes through the attributed one.
+  const sources: StatementSource[] | null = prev.statementSources
+    ? [...prev.statementSources]
+    : null;
+  const legacyCharges: Charge[] = sources ? [] : [...(prev.charges ?? [])];
+  const legacyStatements = [...prev.statements];
+  const legacyFiles = [...(prev.statementFiles ?? [])];
+  const legacyParsers = new Set(prev.parserIds);
 
   for (let i = 0; i < pdfs.length; i++) {
     const pdf = pdfs[i];
     const p = await parsePdf(pdf);
     if (p.kind === "statement") {
-      charges.push(...p.charges);
-      statements.push(p.label);
-      statementFiles.push(p.rel);
-      parserIds.add(p.parserId);
+      if (sources) {
+        if (!sources.some((s) => s.rel === p.rel)) {
+          sources.push({ rel: p.rel, label: p.label, parserId: p.parserId, charges: p.charges });
+        }
+      } else {
+        legacyCharges.push(...p.charges);
+        legacyStatements.push(p.label);
+        legacyFiles.push(p.rel);
+        legacyParsers.add(p.parserId);
+      }
     } else if (p.kind === "invoice") {
       if (!seen.has(p.item.row.rel)) {
         invoices.push(p.item);
@@ -239,5 +310,13 @@ export async function addInvoices(
     onProgress?.({ done: i + 1, total: pdfs.length, name: pdf.rel });
   }
 
-  return assemble(charges, invoices, statements, statementFiles, [...parserIds], emptyPdfs);
+  if (sources) return fromSources(sources, invoices, emptyPdfs);
+  return assemble(
+    legacyCharges,
+    invoices,
+    legacyStatements,
+    legacyFiles,
+    [...legacyParsers],
+    emptyPdfs,
+  );
 }

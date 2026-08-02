@@ -1,4 +1,13 @@
 <script lang="ts">
+  /**
+   * The tool, at /app/.
+   *
+   * The marketing pages around it (landing, audience pages, /wissen/,
+   * /datenschutz/) are generated as static HTML by site/build.mjs — this
+   * component is only the working surface. Header and footer deliberately use
+   * the same classes as those pages (styled in public/site.css) so moving
+   * between them doesn't feel like two different sites.
+   */
   import { onMount } from "svelte";
   import CompletenessMeter from "./lib/CompletenessMeter.svelte";
   import ReportRow from "./lib/ReportRow.svelte";
@@ -8,7 +17,7 @@
   import PickerModal from "./lib/PickerModal.svelte";
   import RenamePanel from "./lib/RenamePanel.svelte";
   import { MOCK_ENTRIES, MOCK_PERIOD, MOCK_STATEMENT, DEMO_SOURCE_PATHS } from "./lib/mock";
-  import { summarize, groupEntries, supportedProviders, type ReportEntry } from "./lib/report";
+  import { summarize, groupEntries, type ReportEntry } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
   import type { CollectedPdf } from "./lib/collect";
   import { downloadCsv } from "./lib/csv";
@@ -156,11 +165,33 @@
     }
   }
 
+  /**
+   * Drop a single loaded document from the report, together with what it
+   * contributed — a statement takes its bookings with it, an invoice releases
+   * the bookings it covered back to "fehlt". Re-assembles from data already in
+   * memory, so nothing is re-read. Removing the last statement leaves nothing to
+   * reconcile against, so that falls back to a full reset.
+   */
+  async function onRemove(rel: string) {
+    if (!result) return;
+    const { removeDocument } = await import("./lib/engine");
+    const next = removeDocument(result, rel);
+    // Drop it from the accumulator too, or the next load would re-add it.
+    sources = sources.filter((p) => p.rel !== rel);
+    if (!next) {
+      reset();
+      return;
+    }
+    result = next;
+    saveSession(next);
+  }
+
   function reset() {
     result = null;
     errorMsg = "";
     filter = "missing";
     sources = [];
+    awaitingDemo = false;
     clearSession();
     // fall back to the demo; reload it if it was cleared/never loaded
     if (!demoResult) loadDemoResult().then((d) => { if (!result && !demoResult) demoResult = d; });
@@ -172,6 +203,15 @@
   }
 
   const DEMO_FILES = ["Kontoauszug-Demo.pdf", "Kreditkartenabrechnung-Demo.pdf"];
+  /**
+   * Downloading the demo files is only half a step — a browser download lands
+   * silently in a folder and the page looks unchanged. So after the click we
+   * put the dropzone into its "waiting for those files" state and scroll to it,
+   * making the next move the obvious one.
+   */
+  let awaitingDemo = $state(false);
+  let uploadEl: HTMLElement;
+
   function downloadDemo() {
     for (const f of DEMO_FILES) {
       const a = document.createElement("a");
@@ -181,6 +221,8 @@
       a.click();
       a.remove();
     }
+    awaitingDemo = true;
+    uploadEl?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   onMount(() => {
@@ -217,530 +259,265 @@
   <PickerModal entry={pickerEntry} loadError={errorMsg} onload={onAssign} onclose={() => (pickerEntry = null)} />
 {/if}
 
-<div class="page">
-  <div class="header-pill-shell">
-    <header class="header-pill" data-menu-open={menuOpen}>
-      <div class="header-pill-brand">
-        <img class="header-pill-logo" src="/icon.svg" alt="Belegabgleich" />
-        <span class="header-pill-brand-label">Belegabgleich</span>
-      </div>
-      <nav class="header-pill-nav">
-        <a class="header-pill-link" href="#report">Bericht</a>
-        <a class="header-pill-link" href="#how">So geht's</a>
-        <a class="header-pill-link" href="#privacy">Datenschutz</a>
-      </nav>
-      <div class="header-pill-actions">
-        <a class="ghicon" href="https://github.com/needle-tools/belegabgleich" target="_blank" rel="noopener noreferrer" aria-label="Quellcode auf GitHub" title="Quellcode auf GitHub">
-          <svg width="17" height="17" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" /></svg>
-        </a>
-      </div>
-      <button
-        class="header-pill-hamburger"
-        type="button"
-        aria-label="Menü"
-        aria-expanded={menuOpen}
-        aria-controls="header-menu"
-        onclick={() => (menuOpen = !menuOpen)}
-      >
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <line class="hamburger-top" x1="3" y1="7" x2="21" y2="7" />
-          <line class="hamburger-mid" x1="3" y1="12" x2="21" y2="12" />
-          <line class="hamburger-bot" x1="3" y1="17" x2="21" y2="17" />
-        </svg>
-      </button>
-      <div class="header-pill-dropdown" id="header-menu">
-        <nav class="header-pill-dropdown-nav">
-          <a class="header-pill-link" href="#report" onclick={closeMenu}>Bericht</a>
-          <a class="header-pill-link" href="#how" onclick={closeMenu}>So geht's</a>
-          <a class="header-pill-link" href="#privacy" onclick={closeMenu}>Datenschutz</a>
-        </nav>
-        <div class="header-pill-dropdown-actions">
-          <a class="ghbtn" href="https://github.com/needle-tools/belegabgleich" target="_blank" rel="noopener noreferrer" onclick={closeMenu}>
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" /></svg>
-            GitHub
-          </a>
-        </div>
-      </div>
-    </header>
-  </div>
-
-  <div class="steps-bar">
-    <span>Kontoauszug</span>
-    <svg class="step-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-    <span>Rechnungen</span>
-    <svg class="step-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-    <span>fehlende Belege</span>
-    <span class="steps-sep" aria-hidden="true">–</span>
-    <span class="steps-local">100 % lokal und privat</span>
-  </div>
-
-  <main>
-    <!-- HERO — the thesis is the completeness meter -->
-    <section class="hero">
-      <div class="hero-copy">
-        <h1>Welcher Buchung fehlt der Beleg?</h1>
-        <p class="lede">
-          Für Freelancer, Selbstständige und kleine Unternehmen: Lade deinen
-          Kontoauszug oder deine Kreditkartenabrechnung und einen Ordner mit
-          Rechnungen — und sieh in Sekunden, welcher Buchung ein Beleg fehlt.
-          Alles läuft 100 % lokal in deinem Browser: Nichts wird gespeichert,
-          hochgeladen oder an Dritte gesendet — Open Source und ohne Cloud-KI.
-        </p>
-        <div class="cta-row">
-          <a class="btn-primary" href="#report">Bericht ansehen</a>
-          <button class="btn-ghost" type="button" onclick={downloadDemo}>
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3 3-3M3 13h10" /></svg>
-            Demo-Dateien laden
-          </button>
-        </div>
-        <p class="demo-hint">
-          Kontoauszug + Kreditkartenabrechnung zum Ausprobieren — frei erfundene Daten.
-        </p>
-      </div>
-
-      <a class="hero-card" href="#report" aria-label="Zum Bericht springen">
-        <div class="hero-card-head">
-          <span class="status-strip-label">Belegquote</span>
-          <span class="period">{period}</span>
-        </div>
-        <CompletenessMeter coverage={summary.coverage} matched={summary.matched} total={summary.total} />
-        <p class="hero-card-foot">
-          {summary.missing} von {summary.total} Buchungen ohne Beleg
-        </p>
+<div class="header-pill-shell">
+  <header class="header-pill" data-menu-open={menuOpen}>
+    <a class="header-pill-brand" href="/" aria-label="Belegabgleich — Startseite">
+      <img class="header-pill-logo" src="/icon.svg" alt="" width="40" height="40" />
+      <span class="header-pill-brand-label">Belegabgleich</span>
+    </a>
+    <nav class="header-pill-nav" aria-label="Hauptnavigation">
+      <a class="header-pill-link" href="/#so-gehts">So geht's</a>
+      <a class="header-pill-link" href="/wissen/">Wissen</a>
+      <a class="header-pill-link" href="/datenschutz/">Datenschutz</a>
+    </nav>
+    <div class="header-pill-actions">
+      <a class="ghicon" href="https://github.com/needle-tools/belegabgleich" target="_blank" rel="noopener noreferrer" aria-label="Quellcode auf GitHub" title="Quellcode auf GitHub">
+        <svg width="17" height="17" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" /></svg>
       </a>
-    </section>
-
-    <!-- UPLOAD -->
-    <section class="upload" id="upload">
-      <Dropzone onload={onLoad} onreset={reset} {busy} {progress} {result} {errorMsg} />
-    </section>
-
-    <!-- REPORT SHELL -->
-    <section class="report" id="report">
-      <div class="report-head">
-        <div class="report-title">
-          <h2>Fehlende Belege</h2>
-          <span class="source">{statementLabel}</span>
-        </div>
-        <div class="segmented-control" role="tablist" aria-label="Filter">
-          {#each filters as f (f.id)}
-            <button role="tab" aria-selected={filter === f.id} onclick={() => (filter = f.id)}>
-              {f.label}<i class="count">{f.count}</i>
-            </button>
-          {/each}
-        </div>
-      </div>
-
-      <div class="status-strip" aria-label="Zusammenfassung">
-        <div class="status-strip-item">
-          <strong class="num">{summary.total}</strong><span class="status-strip-label">Buchungen</span>
-        </div>
-        <div class="sep" aria-hidden="true"></div>
-        <div class="status-strip-item">
-          <strong class="num ok">{summary.matched}</strong><span class="status-strip-label">zugeordnet</span>
-        </div>
-        <div class="sep" aria-hidden="true"></div>
-        <div class="status-strip-item">
-          <strong class="num warn">{summary.missing}</strong><span class="status-strip-label">fehlend</span>
-        </div>
-        <div class="sep" aria-hidden="true"></div>
-        <div class="status-strip-item">
-          <strong class="num">{summary.noInvoice}</strong><span class="status-strip-label">kein Beleg nötig</span>
-        </div>
-        <div class="strip-spacer"></div>
-        <button
-          class="btn-export"
-          type="button"
-          onclick={exportCsv}
-          disabled={entries.length === 0}
-          use:tooltip={"Alle Buchungen mit Status als CSV speichern — für den Steuerberater (Excel-kompatibel)"}
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3 3-3M3 13h10" /></svg>
-          CSV exportieren
-        </button>
-      </div>
-
-      {#key filter}
-        <ul class="rows">
-          {#each groups as group, i (group.key)}
-            {#if group.items.length === 1}
-              <ReportRow entry={group.items[0]} index={i} onpick={openPicker} />
-            {:else}
-              <GroupRow {group} index={i} />
-            {/if}
-          {/each}
-        </ul>
-      {/key}
-
-      {#if visible.length === 0}
-        <p class="empty">Nichts in dieser Ansicht.</p>
-      {/if}
-
-      {#if !live}
-        <p class="mock-note">Demodaten — lade oben deinen Auszug und Rechnungen für den echten Abgleich.</p>
-      {/if}
-    </section>
-
-    <!-- AUTO-RENAME -->
-    {#if result && result.renames.length > 0}
-      <RenamePanel plans={result.renames} />
-    {/if}
-
-    <!-- HOW IT WORKS -->
-    <section class="how" id="how">
-      <h2>In drei Schritten</h2>
-      <ol class="steps">
-        <li class="step">
-          <span class="step-n">1</span>
-          <h3>Auszug laden</h3>
-          <p>Kontoauszug oder Kreditkartenabrechnung der Sparkasse auswählen. Wird im Browser gelesen.</p>
-        </li>
-        <li class="step">
-          <span class="step-n">2</span>
-          <h3>Rechnungsordner wählen</h3>
-          <p>Den Ordner mit deinen Rechnungen freigeben — die PDFs verlassen den Rechner nicht.</p>
-        </li>
-        <li class="step">
-          <span class="step-n">3</span>
-          <h3>Lücken sehen</h3>
-          <p>Jede Buchung wird ihrer Rechnung zugeordnet. Was fehlt, steht oben — mit Link zum Download.</p>
-        </li>
-      </ol>
-    </section>
-
-    <!-- PRIVACY -->
-    <section class="privacy" id="privacy">
-      <div class="privacy-inner">
-        <h2>Deine Daten bleiben bei dir</h2>
-        <ul>
-          <li><strong>Kein Upload, kein Backend.</strong> Auszüge und Rechnungen werden im Browser gelesen.</li>
-          <li><strong>KI nur lokal.</strong> Optional über Ollama auf deinem Rechner — der Standardweg braucht keine.</li>
-          <li><strong>Anonyme, cookielose Statistik</strong> — keine Weitergabe an Dritte, niemals Inhalte, Beträge oder Kontodaten.</li>
-          <li><strong>Open Source.</strong> <a href="https://github.com/needle-tools/belegabgleich" target="_blank" rel="noopener noreferrer">Lies den Code</a> — die Abgleich-Logik sind rund 700 Zeilen.</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- SUPPORTED PROVIDERS — trust + long-tail SEO ("Rechnung <Anbieter> finden") -->
-    <section class="providers" id="anbieter">
-      <h2>Erkennt Buchungen von über {supportedProviders.length} Diensten</h2>
-      <p class="providers-lede">
-        Belegabgleich ordnet deine Kontoauszüge automatisch dem richtigen Anbieter zu
-        und führt dich mit einem Klick zur passenden Rechnung — darunter:
-      </p>
-      <ul class="provider-tags">
-        {#each supportedProviders as p (p.name)}
-          <li>
-            {#if p.invoiceUrl}
-              <a
-                class="provider-tag"
-                href={p.invoiceUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                onclick={() => track("provider_link_opened", { provider: p.name })}
-              >{p.name}</a>
-            {:else}
-              <span class="provider-tag">{p.name}</span>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-      <p class="providers-cta">
-        Dein Anbieter fehlt?
-        <a href="https://github.com/needle-tools/belegabgleich/blob/main/providers.json" target="_blank" rel="noopener noreferrer">Auf GitHub ergänzen →</a>
-      </p>
-    </section>
-
-    <!-- FAQ — use-case prose + long-tail search phrases (also feeds AI answer engines) -->
-    <section class="faq" id="faq">
-      <h2>Belege für Steuer &amp; Steuerberater zusammenstellen</h2>
-      <p class="faq-lede">
-        Ob Steuererklärung, Jahresabschluss oder Rückfrage vom Finanzamt: Zu jeder
-        Abbuchung auf dem Konto gehört ein Beleg — und am Ende fehlen fast immer ein
-        paar Rechnungen. Belegabgleich vergleicht deinen Kontoauszug mit deinen
-        vorhandenen Belegen und zeigt dir genau, welche Rechnung noch fehlt. So
-        sammelst du gezielt nur das Fehlende, statt alles manuell durchzugehen.
-      </p>
-      <div class="faq-list">
-        <div class="faq-item">
-          <h3>Wie finde ich heraus, für welche Buchung ein Beleg fehlt?</h3>
-          <p>Lade deinen Sparkassen-Kontoauszug oder deine Kreditkartenabrechnung und einen Ordner mit deinen Rechnungen. Belegabgleich vergleicht jede Buchung mit deinen Belegen und zeigt sofort, zu welcher Abbuchung noch keine Rechnung vorliegt.</p>
-        </div>
-        <div class="faq-item">
-          <h3>Mein Steuerberater fragt nach fehlenden Belegen — wie sammle ich sie schnell?</h3>
-          <p>Belegabgleich listet genau die Buchungen ohne Beleg auf und verlinkt für viele Anbieter direkt die Rechnungsseite. So lädst du gezielt nur die fehlenden Rechnungen herunter, statt alles manuell zu prüfen.</p>
-        </div>
-        <div class="faq-item">
-          <h3>Werden meine Kontoauszüge oder Bankdaten hochgeladen?</h3>
-          <p>Nein. Belegabgleich läuft zu 100 % lokal in deinem Browser. Deine Auszüge und Rechnungen verlassen den Rechner nicht — es gibt kein Backend und keine Cloud-KI.</p>
-        </div>
-        <div class="faq-item">
-          <h3>Welche Banken werden unterstützt?</h3>
-          <p>Aktuell Kontoauszüge und Kreditkartenabrechnungen der Sparkasse als PDF. Weitere Banken lassen sich über <a href="https://github.com/needle-tools/belegabgleich/tree/main/packages/parsers" target="_blank" rel="noopener noreferrer">quelloffene Parser</a> ergänzen.</p>
-        </div>
-        <div class="faq-item">
-          <h3>Was kostet Belegabgleich?</h3>
-          <p>Nichts. Belegabgleich ist kostenlos und Open Source.</p>
-        </div>
-        <div class="faq-item">
-          <h3>Kann ich die fehlenden Belege als Liste exportieren?</h3>
-          <p>Ja, du kannst den Bericht als CSV exportieren — praktisch für die Buchhaltung oder den Steuerberater.</p>
-        </div>
-        <div class="faq-item">
-          <h3>Kann Belegabgleich meine Belege automatisch umbenennen?</h3>
-          <p>Ja. Auf Wunsch benennt Belegabgleich deine Rechnungen einheitlich um (z.&nbsp;B. Datum_Anbieter_Betrag).</p>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer class="footer-area">
-    <div class="footer-area-main">
-      <div class="footer-brand">
-        <span><strong>Belegabgleich</strong> ist ein kostenloses Tool von</span>
-        <a href="https://needle.tools" target="_blank" rel="noopener noreferrer" aria-label="Needle">
-          <img src="/logos/logo_needle_black_no_padding.svg" alt="Needle" />
+    </div>
+    <button
+      class="header-pill-hamburger"
+      type="button"
+      aria-label="Menü"
+      aria-expanded={menuOpen}
+      aria-controls="site-menu"
+      onclick={() => (menuOpen = !menuOpen)}
+    >
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <line class="hamburger-top" x1="3" y1="7" x2="21" y2="7" />
+        <line class="hamburger-mid" x1="3" y1="12" x2="21" y2="12" />
+        <line class="hamburger-bot" x1="3" y1="17" x2="21" y2="17" />
+      </svg>
+    </button>
+    <div class="header-pill-dropdown" id="site-menu">
+      <nav class="header-pill-dropdown-nav" aria-label="Menü">
+        <a class="header-pill-link" href="/" onclick={closeMenu}>Start</a>
+        <a class="header-pill-link" href="/#so-gehts" onclick={closeMenu}>So geht's</a>
+        <a class="header-pill-link" href="/wissen/" onclick={closeMenu}>Wissen</a>
+        <a class="header-pill-link" href="/datenschutz/" onclick={closeMenu}>Datenschutz</a>
+      </nav>
+      <div class="header-pill-dropdown-actions">
+        <a class="btn btn-ghost" href="https://github.com/needle-tools/belegabgleich" target="_blank" rel="noopener noreferrer" onclick={closeMenu}>
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" /></svg>
+          GitHub
         </a>
       </div>
-      <span class="footer-meta">
-        <a href="https://github.com/needle-tools/belegabgleich" target="_blank" rel="noopener noreferrer">Quellcode&nbsp;auf&nbsp;GitHub</a>
-        – MIT-Lizenz – version {version}
-      </span>
     </div>
-  </footer>
+  </header>
 </div>
 
+<main id="main">
+  <!-- WORKING HEADER — states the job, then gets out of the way -->
+  <section class="app-intro">
+    <div class="app-intro-copy">
+      <h1>Belege abgleichen</h1>
+      <p>Lade deinen Kontoauszug oder deine Kreditkartenabrechnung und den Ordner mit
+        deinen Rechnungen. Beides wird hier im Browser gelesen — nichts wird hochgeladen.</p>
+      <button class="btn btn-ghost btn-sm" type="button" onclick={downloadDemo}>
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3 3-3M3 13h10" /></svg>
+        Demo-Dateien herunterladen
+      </button>
+      <span class="demo-hint">
+        Kein eigener Auszug zur Hand? Lade zwei erfundene Beispiel-PDFs herunter und
+        zieh sie anschließend hier auf die Seite — der Ablauf ist derselbe wie mit
+        echten Unterlagen.
+      </span>
+    </div>
+
+    <div class="app-intro-meter">
+      <div class="meter-head">
+        <span class="micro-label">Belegquote</span>
+        <span class="meter-period">{period}</span>
+      </div>
+      <CompletenessMeter coverage={summary.coverage} matched={summary.matched} total={summary.total} />
+    </div>
+  </section>
+
+  <!-- UPLOAD -->
+  <section class="upload" id="upload" bind:this={uploadEl}>
+    <Dropzone onload={onLoad} onreset={reset} onremove={onRemove} {busy} {progress} {result} {errorMsg} {awaitingDemo} />
+  </section>
+
+  <!-- REPORT SHELL -->
+  <section class="report" id="report">
+    <div class="report-head">
+      <div class="report-title">
+        <h2>Fehlende Belege</h2>
+        <span class="source">{statementLabel}</span>
+      </div>
+      <div class="segmented-control" role="tablist" aria-label="Filter">
+        {#each filters as f (f.id)}
+          <button role="tab" aria-selected={filter === f.id} onclick={() => (filter = f.id)}>
+            {f.label}<i class="count">{f.count}</i>
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="status-strip" aria-label="Zusammenfassung">
+      <div class="status-strip-item">
+        <strong class="num">{summary.total}</strong><span class="status-strip-label">Buchungen</span>
+      </div>
+      <div class="sep" aria-hidden="true"></div>
+      <div class="status-strip-item">
+        <strong class="num ok">{summary.matched}</strong><span class="status-strip-label">zugeordnet</span>
+      </div>
+      <div class="sep" aria-hidden="true"></div>
+      <div class="status-strip-item">
+        <strong class="num warn">{summary.missing}</strong><span class="status-strip-label">fehlend</span>
+      </div>
+      <div class="sep" aria-hidden="true"></div>
+      <div class="status-strip-item">
+        <strong class="num">{summary.noInvoice}</strong><span class="status-strip-label">kein Beleg nötig</span>
+      </div>
+      <div class="strip-spacer"></div>
+      <button
+        class="btn-export"
+        type="button"
+        onclick={exportCsv}
+        disabled={entries.length === 0}
+        use:tooltip={"Alle Buchungen mit Status als CSV speichern — für den Steuerberater (Excel-kompatibel)"}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3 3-3M3 13h10" /></svg>
+        CSV exportieren
+      </button>
+    </div>
+
+    {#key filter}
+      <ul class="rows">
+        {#each groups as group, i (group.key)}
+          {#if group.items.length === 1}
+            <ReportRow entry={group.items[0]} index={i} onpick={openPicker} />
+          {:else}
+            <GroupRow {group} index={i} />
+          {/if}
+        {/each}
+      </ul>
+    {/key}
+
+    {#if visible.length === 0}
+      <p class="empty">Nichts in dieser Ansicht.</p>
+    {/if}
+
+    {#if !live}
+      <p class="mock-note">Demodaten — lade oben deinen Auszug und deine Rechnungen für den echten Abgleich.</p>
+    {/if}
+
+    <p class="accuracy-note">
+      Der Abgleich läuft automatisch über Datum, Betrag und erkannten Anbieter und kann
+      Belege übersehen oder falsch zuordnen. Ein leerer Fehlend-Bericht ist kein Nachweis
+      für eine vollständige Buchführung — bitte prüfe das Ergebnis.
+      <a href="/haftungsausschluss/">Haftungsausschluss</a>
+    </p>
+  </section>
+
+  <!-- AUTO-RENAME -->
+  {#if result && result.renames.length > 0}
+    <RenamePanel plans={result.renames} />
+  {/if}
+
+  <!-- Back into the site: the tool is a destination, not a dead end. -->
+  <nav class="app-outro" aria-label="Weiter auf der Seite">
+    <a href="/wissen/fehlende-belege-finden/">
+      <strong>Wie du fehlende Belege systematisch findest</strong>
+      <span>Drei Wege im Vergleich — und worauf es beim Abgleich ankommt.</span>
+    </a>
+    <a href="/datenschutz/">
+      <strong>Was mit deinen Daten passiert</strong>
+      <span>Warum hier nichts hochgeladen wird, und was die Statistik misst.</span>
+    </a>
+  </nav>
+</main>
+
+<footer class="site-footer app-footer">
+  <div class="site-footer-inner">
+    <div class="app-footer-row">
+      <span class="app-footer-vendor">
+        <strong>Belegabgleich</strong> — ein Open-Source-Werkzeug von
+        <a href="https://needle.tools" target="_blank" rel="noopener noreferrer" aria-label="Needle — needle.tools">
+          <img src="/logos/logo_needle_black_no_padding.svg" alt="Needle" width="86" height="22" />
+        </a>
+      </span>
+      <nav class="app-footer-links" aria-label="Fußzeile">
+        <a href="/">Start</a>
+        <a href="/wissen/">Wissen</a>
+        <a href="/datenschutz/">Datenschutz</a>
+        <a href="/haftungsausschluss/">Haftungsausschluss</a>
+        <a href="https://needle.tools/imprint/" target="_blank" rel="noopener noreferrer">Impressum</a>
+        <a href="https://github.com/needle-tools/belegabgleich" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </nav>
+    </div>
+    <div class="site-footer-legal">
+      <span>© {new Date().getFullYear()} <a href="https://needle.tools" target="_blank" rel="noopener noreferrer">Needle</a> · MIT-Lizenz</span>
+      <span class="site-footer-version">{version}</span>
+    </div>
+  </div>
+</footer>
+
 <style>
-  .page {
-    min-height: 100dvh;
-    display: flex;
-    flex-direction: column;
-  }
-  main {
-    width: 100%;
-    max-width: var(--layout-max);
-    margin: 0 auto;
-    padding: 0 24px;
-    flex: 1;
-  }
+  /* Header, footer shell, buttons and the base type scale are global
+     (public/site.css) so this page and the static pages stay identical. What's
+     left here is the working surface itself. */
 
-  /* header */
-  .header-pill-shell {
-    position: sticky;
-    top: 0;
-    z-index: 50;
-    display: flex;
-    justify-content: center;
-    padding: 10px 24px;
-    /* fade scrolled content behind the pill's surrounding margin */
-    /* background: color-mix(in srgb, var(--surface-page) 72%, transparent); 
-    backdrop-filter: saturate(1.1) blur(8px);
-    -webkit-backdrop-filter: saturate(1.1) blur(8px); */
-  }
-  .header-pill {
-    width: 100%;
-    max-width: var(--layout-max);
-  }
-  .header-pill-brand { gap: 9px; }
-  .header-pill-logo { width: 40px; height: auto; }
-  .header-pill-brand-label {
-    font-family: var(--font-family-display);
-    font-weight: 700;
-    font-size: 1.08rem;
-    letter-spacing: -0.02em;
-    line-height: 1;
-    color: var(--text-primary);
-    white-space: nowrap;
-  }
-
-  /* make the burger dropdown span the full header-pill width, and animate it in
-     (brand classes are global; the extra .header-pill raises specificity over
-     the brand's right-anchored, width-capped container-query rule) */
-  :global(.header-pill .header-pill-dropdown) {
-    left: 0;
-    right: 0;
-    min-width: 0;
-    max-width: none;
-  }
-  :global(.header-pill[data-menu-open="true"] .header-pill-dropdown) {
-    transform-origin: top center;
-    animation: menu-in 0.2s cubic-bezier(0.2, 0, 0, 1);
-  }
-  @keyframes -global-menu-in {
-    from { opacity: 0; transform: translateY(-8px) scale(0.98); }
-  }
-  .ghbtn {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    min-height: 40px;
-    padding: 0 14px;
-    border-radius: var(--radius-pill);
-    background: var(--text-primary);
-    color: var(--text-inverse);
-    font-weight: 700;
-    font-size: 0.85rem;
-    text-decoration: none;
-    transition: scale 0.12s ease, opacity 0.15s ease;
-  }
-  .ghbtn svg { width: 15px; height: 15px; fill: currentColor; }
-  .ghbtn:hover { opacity: 0.9; }
-  .ghbtn:active { scale: 0.96; }
-
-  /* Subtle, icon-only GitHub link in the header — a trust signal, not a primary
-     action (the labelled link lives in the footer + providers section). */
-  .ghicon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: var(--radius-pill);
-    color: var(--text-muted);
-    transition: color 0.15s ease, background-color 0.15s ease, scale 0.12s ease;
-  }
-  .ghicon svg { width: 17px; height: 17px; fill: currentColor; display: block; }
-  .ghicon:hover { color: var(--text-primary); background: var(--surface-panel-muted); }
-  .ghicon:active { scale: 0.94; }
-
-  /* hero */
-  .hero {
+  /* -- intro ---------------------------------------------------------------- */
+  .app-intro {
     display: grid;
-    grid-template-columns: 1.1fr 0.9fr;
-    gap: 48px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 40px;
     align-items: center;
-    padding: 72px 0 64px;
+    padding: 36px 0 32px;
   }
-  h1 {
-    font-family: var(--font-family-display);
-    font-size: var(--type-display-size);
-    font-weight: var(--type-display-weight);
-    line-height: var(--type-display-line-height);
-    letter-spacing: var(--type-display-tracking);
-    text-wrap: balance;
+  .app-intro h1 {
+    font-size: var(--type-page-title-size);
+    font-weight: var(--type-page-title-weight);
+    line-height: var(--type-page-title-line-height);
+    letter-spacing: var(--type-page-title-tracking);
   }
-  .lede {
-    margin: 22px 0 0;
-    max-width: 42ch;
-    font-size: 1.12rem;
+  .app-intro p {
+    margin: 14px 0 20px;
+    max-width: 52ch;
     color: var(--text-secondary);
-    text-wrap: balance;
-  }
-  .cta-row {
-    display: flex;
-    gap: 12px;
-    margin-top: 30px;
-    flex-wrap: wrap;
-  }
-  .btn-primary, .btn-ghost {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 46px;
-    padding: 0 22px;
-    border-radius: var(--radius-control);
-    font-family: var(--font-family-body);
-    font-weight: 700;
-    font-size: 0.95rem;
-    text-decoration: none;
-    cursor: pointer;
-    transition: scale 0.12s ease, background-color 0.15s ease, border-color 0.15s ease;
-  }
-  .btn-ghost svg {
-    width: 15px; height: 15px;
-    fill: none; stroke: currentColor; stroke-width: 1.7;
-    stroke-linecap: round; stroke-linejoin: round;
   }
   .demo-hint {
-    margin: 12px 0 0;
+    display: block;
+    margin-top: 10px;
+    max-width: 48ch;
     font-size: 0.82rem;
+    line-height: 1.5;
     color: var(--text-muted);
   }
-  .btn-primary {
-    background: var(--accent-brand-deep);
-    color: var(--text-inverse);
-    box-shadow: var(--shadow-subtle);
-  }
-  .btn-primary:hover { background: var(--text-success); }
-  .btn-ghost {
-    background: var(--surface-panel);
-    color: var(--text-primary);
-    border: 1px solid var(--border-strong);
-  }
-  .btn-ghost:hover { border-color: var(--accent-brand-deep); }
-  .btn-primary:active, .btn-ghost:active { scale: 0.96; }
-  /* 3-step flow strip directly under the header */
-  .steps-bar {
-    margin: 0;
-    padding: 14px 24px 0;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--text-muted);
-  }
-  .step-arrow {
-    width: 16px;
-    height: 16px;
-    flex: none;
-    color: var(--accent-brand-deep);
-  }
-  .steps-sep { color: var(--border-strong); }
-  .steps-local { color: var(--text-primary); font-weight: 800; white-space: nowrap; }
-
-  .hero-card {
+  .app-intro-meter {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 18px;
-    padding: 28px;
+    gap: 12px;
+    padding: 22px 26px;
     background: var(--surface-panel);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-panel);
     box-shadow: var(--shadow-panel);
-    text-decoration: none;
-    color: inherit;
-    cursor: pointer;
-    transition: box-shadow 0.18s ease, transform 0.18s ease, border-color 0.18s ease;
   }
-  .hero-card:hover {
-    box-shadow: var(--shadow-floating);
-    border-color: var(--border-strong);
-    transform: translateY(-2px);
-  }
-  .hero-card:active { transform: translateY(0); }
-  @media (prefers-reduced-motion: reduce) {
-    .hero-card { transition: none; }
-    .hero-card:hover { transform: none; }
-  }
-  .hero-card-head {
+  .meter-head {
     width: 100%;
     display: flex;
-    align-items: center;
+    align-items: baseline;
     justify-content: space-between;
+    gap: 16px;
   }
-  .period { color: var(--text-muted); font-size: 0.85rem; font-weight: 650; }
-  .hero-card-foot {
-    margin: 0;
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-    font-variant-numeric: tabular-nums;
+  .meter-period {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 650;
+    font-family: var(--font-family-code);
   }
 
-  /* upload */
+  /* -- upload --------------------------------------------------------------- */
   .upload {
     margin-bottom: 28px;
     scroll-margin-top: 96px;
   }
-  .btn-export:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
 
-  /* report */
+  /* -- report --------------------------------------------------------------- */
   .report {
     background: var(--surface-panel);
     border: 1px solid var(--border-subtle);
@@ -808,6 +585,7 @@
   .btn-export svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .btn-export:hover { border-color: var(--accent-brand-deep); }
   .btn-export:active { scale: 0.96; }
+  .btn-export:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .rows {
     display: grid;
@@ -829,174 +607,81 @@
     color: var(--text-muted);
     text-align: center;
   }
-
-  /* how */
-  .how { padding: 80px 0 16px; scroll-margin-top: 96px; }
-  .how h2 {
-    font-size: var(--type-section-title-size);
-    font-weight: var(--type-section-title-weight);
-    letter-spacing: var(--type-section-title-tracking);
-    margin-bottom: 24px;
+  /* Says plainly that the matching is a guess. Quiet, but always present — the
+     report must never read as a certificate of completeness. */
+  .accuracy-note {
+    margin: 18px 0 0;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-subtle);
+    font-size: 0.79rem;
+    line-height: 1.45;
+    color: var(--text-muted);
+    max-width: 84ch;
   }
-  .steps {
+  .accuracy-note a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+  .accuracy-note a:hover { color: var(--text-primary); }
+
+  /* -- outro ---------------------------------------------------------------- */
+  .app-outro {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
-    list-style: none;
-    margin: 0;
-    padding: 0;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+    gap: 12px;
+    margin: 48px 0 0;
   }
-  .step {
-    padding: 22px;
-    background: var(--surface-panel);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-card);
-    box-shadow: var(--shadow-subtle);
-  }
-  .step-n {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px; height: 30px;
-    border-radius: 999px;
-    background: var(--surface-callout-success);
-    color: var(--text-success);
-    font-family: var(--font-family-display);
-    font-weight: 800;
-    margin-bottom: 14px;
-  }
-  .step h3 { font-size: 1.02rem; font-weight: 700; margin-bottom: 6px; }
-  .step p { margin: 0; color: var(--text-secondary); font-size: 0.92rem; }
-
-  /* privacy */
-  .privacy { padding: 56px 0 80px; scroll-margin-top: 96px; }
-  .privacy-inner {
-    background: var(--surface-callout-info);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-panel);
-    padding: 32px 36px;
-  }
-  .privacy h2 {
-    font-size: var(--type-section-title-size);
-    font-weight: var(--type-section-title-weight);
-    letter-spacing: var(--type-section-title-tracking);
-    margin-bottom: 16px;
-  }
-  .privacy ul { margin: 0; padding-left: 20px; }
-  .privacy li { margin: 8px 0; color: var(--text-secondary); }
-  .privacy strong { color: var(--text-primary); }
-  .privacy a {
-    color: var(--accent-brand-deep);
-    text-decoration: none;
-    border-bottom: 1px solid color-mix(in srgb, var(--accent-brand-deep) 35%, transparent);
-    transition: border-color 0.15s ease;
-  }
-  .privacy a:hover { border-bottom-color: var(--accent-brand-deep); }
-
-  /* supported providers */
-  .providers { padding: 8px 0 80px; scroll-margin-top: 96px; }
-  .providers h2 {
-    font-size: var(--type-section-title-size);
-    font-weight: var(--type-section-title-weight);
-    letter-spacing: var(--type-section-title-tracking);
-    margin-bottom: 10px;
-  }
-  .providers-lede { color: var(--text-secondary); max-width: 60ch; margin: 0 0 20px; }
-  .provider-tags {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .provider-tag {
-    display: inline-block;
-    padding: 8px 14px;
-    border: 1px solid var(--border-subtle);
-    border-radius: 8px;
-    background: var(--surface-callout-info);
-    color: var(--text-secondary);
-    font-size: 0.95rem;
-    text-decoration: none;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-  }
-  a.provider-tag:hover {
-    border-color: var(--accent-brand-deep);
-    color: var(--accent-brand-deep);
-    background: color-mix(in srgb, var(--accent-brand) 8%, transparent);
-  }
-  .providers-cta { margin: 22px 0 0; color: var(--text-muted); font-size: 0.92rem; }
-  .providers-cta a {
-    color: var(--accent-brand-deep);
-    text-decoration: none;
-    border-bottom: 1px solid color-mix(in srgb, var(--accent-brand-deep) 35%, transparent);
-  }
-  .providers-cta a:hover { border-bottom-color: var(--accent-brand-deep); }
-
-  /* faq */
-  .faq { padding: 8px 0 80px; scroll-margin-top: 96px; }
-  .faq h2 {
-    font-size: var(--type-section-title-size);
-    font-weight: var(--type-section-title-weight);
-    letter-spacing: var(--type-section-title-tracking);
-    margin-bottom: 10px;
-  }
-  .faq-lede { color: var(--text-secondary); max-width: 65ch; margin: 0 0 24px; }
-  .faq-list { display: flex; flex-direction: column; gap: 22px; max-width: 75ch; }
-  .faq-item h3 {
-    margin: 0 0 6px;
-    font-size: 1.05rem;
-    font-weight: 700;
-    color: var(--text-primary);
-  }
-  .faq-item p {
-    margin: 0;
-    color: var(--text-secondary);
-    max-width: 65ch;
-  }
-  .faq-item a {
-    color: inherit;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-
-  /* footer */
-  .footer-area { margin-top: auto; }
-  .footer-area-main {
-    max-width: var(--layout-max);
-    margin: 0 auto;
-    padding: 28px 24px;
+  .app-outro a {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    text-align: center;
-    gap: 8px;
-  }
-  .footer-brand { display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 400; flex-wrap: wrap; }
-  .footer-brand strong { font-weight: 700; }
-  .footer-brand a { display: inline-flex; align-items: center; }
-  .footer-brand img { height: 22px; opacity: 0.85; transition: opacity 0.15s ease; }
-  .footer-brand a:hover img { opacity: 1; }
-  .footer-meta { color: var(--text-muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
-  .footer-meta a {
-    color: inherit;
+    gap: 5px;
+    padding: 18px 22px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-card);
+    background: var(--surface-panel);
     text-decoration: none;
-    border-bottom: 1px solid color-mix(in srgb, currentColor 35%, transparent);
-    transition: color 0.15s ease;
+    color: inherit;
+    transition: border-color 0.16s ease, background 0.16s ease;
   }
-  .footer-meta a:hover { color: var(--text-primary); }
+  .app-outro a:hover {
+    border-color: var(--accent-brand-deep);
+    background: var(--surface-panel-muted);
+  }
+  .app-outro strong {
+    font-family: var(--font-family-display);
+    font-size: 1rem;
+    font-weight: 750;
+    letter-spacing: -0.015em;
+  }
+  .app-outro span { color: var(--text-secondary); font-size: 0.9rem; }
 
-  @keyframes fade-up { from { opacity: 0; transform: translateY(10px); } }
-  @media (prefers-reduced-motion: no-preference) {
-    .hero-copy { animation: fade-up 0.5s cubic-bezier(0.2, 0, 0, 1) backwards; }
-    .hero-card { animation: fade-up 0.5s cubic-bezier(0.2, 0, 0, 1) 0.1s backwards; }
+  /* -- footer --------------------------------------------------------------- */
+  .app-footer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    flex-wrap: wrap;
   }
+  .app-footer-vendor {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+    color: var(--text-secondary);
+    font-size: 0.92rem;
+  }
+  .app-footer-vendor strong { color: var(--text-primary); font-weight: 700; }
+  .app-footer-vendor img { height: 20px; width: auto; opacity: 0.85; display: block; }
+  .app-footer-vendor a:hover img { opacity: 1; }
+  .app-footer-links { display: flex; gap: 16px; flex-wrap: wrap; }
+  .app-footer-links a {
+    color: var(--text-secondary);
+    font-size: 0.92rem;
+    text-decoration: none;
+  }
+  .app-footer-links a:hover { color: var(--text-primary); }
 
   @media (max-width: 860px) {
-    .hero { grid-template-columns: 1fr; gap: 32px; padding: 48px 0; }
-    .hero-card { order: -1; }
-    .steps { grid-template-columns: 1fr; }
+    .app-intro { grid-template-columns: 1fr; gap: 28px; padding: 28px 0; }
+    .app-intro-meter { order: -1; }
   }
   @media (max-width: 560px) {
     .report { padding: 18px; }

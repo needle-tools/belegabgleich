@@ -106,8 +106,37 @@ packages/
   parsers/    @kah/parsers   pluggable Bank-Parser (vorerst nur Sparkasse)
   analytics/  @kah/analytics datenschutzfreundliches Rybbit-Tracking (keine sensiblen Daten)
   web/        @kah/web       Svelte-App: Parsing im Browser, Abgleich, Umbenennen, CSV-Export
+    site/                    Generator für die statischen Seiten (siehe unten)
+    public/site.css          globales Stylesheet für Seiten *und* Tool
 providers.json               community-pflegbare Anbieter-Aliase + Rechnungs-Links
 ```
+
+### Seiten und Tool
+
+Die Website ist eine Multi-Page-Anwendung. Das Tool liegt unter `/app/` und ist
+der einzige Einstiegspunkt, der ein JS-Bundle lädt; alle übrigen Seiten werden zur
+Bauzeit aus `packages/web/site/*.mjs` als fertiges HTML erzeugt (kein Bundle, kein
+Framework zur Laufzeit — nur `site.css` und ein kleines `site.js` fürs Menü).
+
+```
+/                              Landing
+/fuer-freelancer/              Zielgruppenseiten
+/fuer-kleinunternehmen/
+/fuer-vereine/
+/sparkasse-kontoauszug-belege/
+/wissen/ + /wissen/<slug>/     Erklärtexte
+/datenschutz/                  Datenschutzerklärung
+/haftungsausschluss/           Gewährleistung & Haftung
+/app/                          das Tool (noindex)
+```
+
+Inhalte werden in `site/pages.mjs` (Landing, Zielgruppen, Recht) und
+`site/articles.mjs` (Wissen) gepflegt, Layout und Meta-Tags in `site/layout.mjs`,
+wiederkehrende Abschnitte in `site/partials.mjs`. `site/build.mjs` schreibt daraus
+die HTML-Dateien, `sitemap.xml` und `robots.txt`. **Diese Dateien sind generiert
+und git-ignoriert** — bearbeite die `site/*.mjs`, nicht das erzeugte HTML. Beim
+Ändern eines Textes lädt der Dev-Server neu; eine *neue Seite* braucht einen
+Neustart, weil die Einstiegspunkte Teil der Vite-Konfiguration sind.
 
 ## Lizenz
 

@@ -43,6 +43,9 @@ function toStorable(result: RunResult): RunResult {
     entries: result.entries,
     statements: result.statements,
     statementFiles: result.statementFiles ?? [],
+    // Plain data, and what lets a restored session still remove a single
+    // statement together with the charges it contributed.
+    statementSources: result.statementSources,
     parserIds: result.parserIds,
     period: result.period,
     invoiceCount: result.invoiceCount,

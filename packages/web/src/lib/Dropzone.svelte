@@ -7,6 +7,7 @@
     type CollectedPdf,
   } from "./collect";
   import { summarize } from "./report";
+  import { tooltip } from "./tooltip";
   import type { RunResult, RunProgress } from "./engine";
 
   let {
@@ -16,18 +17,46 @@
     progress = null,
     result = null,
     errorMsg = "",
+    awaitingDemo = false,
+    onremove,
   }: {
     onload: (pdfs: CollectedPdf[]) => void;
     onreset?: () => void;
+    /** Drop a single loaded document (by display path) from the report. */
+    onremove?: (rel: string) => void;
     busy?: boolean;
     progress?: RunProgress | null;
     result?: RunResult | null;
     errorMsg?: string;
+    /** The demo PDFs were just downloaded — say what to do with them next. */
+    awaitingDemo?: boolean;
   } = $props();
 
   // Success summary, derived from the live run.
   const summary = $derived(result ? summarize(result.entries) : null);
-  const statementText = $derived(result ? result.statements.join(" · ") || "Auszug" : "");
+
+  /**
+   * The statements that were read, one row each. Loading a Kontoauszug and a
+   * Kreditkartenabrechnung — separately or together — is the normal case, so
+   * which files are in play has to be visible without opening anything.
+   * `statements` (labels) and `statementFiles` (paths) are pushed in step but
+   * de-duplicated separately, so pair them defensively.
+   */
+  const statementList = $derived(
+    result?.statementSources
+      ? result.statementSources.map((s) => ({ rel: s.rel, label: s.label, removable: true }))
+      : (result?.statementFiles ?? []).map((rel, i) => ({
+          rel,
+          label: result?.statements[i] ?? "Auszug",
+          // A session stored before charges were attributed per file: we can't
+          // tell which bookings came from which statement, so don't offer to
+          // remove one. Loading anything new restores the ability.
+          removable: false,
+        })),
+  );
+
+  /** Remove one document; the parent re-assembles the report without it. */
+  const remove = (rel: string) => onremove?.(rel);
 
   // Collecting (folder scan / reading bytes) happens here before the engine runs;
   // `busy`/`progress` (from the parent) cover the subsequent reading phase.
@@ -110,6 +139,7 @@
   class:dragging
   class:busy={working}
   class:done={!!result}
+  class:awaiting={awaitingDemo && !result && !working}
   aria-label="Auszug und Rechnungen ablegen"
   ondrop={onDrop}
   ondragenter={onDragEnter}
@@ -124,7 +154,36 @@
         <circle class="dz-check-circle" cx="26" cy="26" r="24" />
         <path class="dz-check-mark" d="M15 27l7.5 7.5L38 19" />
       </svg>
-      <p class="dz-title">{statementText} ausgelesen</p>
+      <p class="dz-title">
+        {statementList.length === 1 ? "Ein Auszug gelesen" : `${statementList.length} Auszüge gelesen`}
+      </p>
+
+      <!-- Which files are actually in this report — at the top level, not behind
+           a disclosure. Loading a second file has to visibly add a row. -->
+      <ul class="dz-sources">
+        {#each statementList as s (s.rel)}
+          <li>
+            <svg class="dz-source-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5l-3.5-3.5Z" />
+              <path d="M9.5 1.5V5H13" />
+            </svg>
+            <span class="dz-source-name" title={s.rel}>{baseName(s.rel)}</span>
+            <span class="dz-pill stmt">{s.label}</span>
+            {#if onremove && s.removable}
+              <button
+                type="button"
+                class="dz-remove"
+                onclick={() => remove(s.rel)}
+                aria-label={`${baseName(s.rel)} entfernen`}
+                use:tooltip={"Diesen Auszug und seine Buchungen aus dem Bericht entfernen"}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+              </button>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+
       <p class="dz-sub">
         {summary.total}
         {summary.total === 1 ? "Buchung" : "Buchungen"} · {result.invoiceCount}
@@ -155,7 +214,7 @@
 
       <details class="dz-files">
         <summary>
-          Gelesene Dateien anzeigen
+          Alle gelesenen Dateien anzeigen
           <span class="dz-files-count">
             {result.statementFiles?.length ?? 0} Auszüge · {result.invoices.length} Rechnungen{#if result.emptyPdfs.length} · {result.emptyPdfs.length} übersprungen{/if}
           </span>
@@ -163,10 +222,20 @@
         <div class="dz-files-body">
           <table class="dz-table">
             <tbody>
-              {#each result.statementFiles ?? [] as f}
-                <tr><td class="dz-td-file">{baseName(f)}</td><td><span class="dz-pill stmt">Auszug</span></td></tr>
+              {#each statementList as s (s.rel)}
+                <tr>
+                  <td class="dz-td-file">{baseName(s.rel)}</td>
+                  <td><span class="dz-pill stmt">Auszug</span></td>
+                  <td class="dz-td-x">
+                    {#if onremove && s.removable}
+                      <button type="button" class="dz-remove" onclick={() => remove(s.rel)} aria-label={`${baseName(s.rel)} entfernen`} use:tooltip={"Auszug und seine Buchungen entfernen"}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    {/if}
+                  </td>
+                </tr>
               {/each}
-              {#each result.invoices as inv}
+              {#each result.invoices as inv (inv.row.rel)}
                 <tr>
                   <td class="dz-td-file">
                     {#if inv.pdf?.data}
@@ -176,10 +245,27 @@
                     {/if}
                   </td>
                   <td><span class="dz-pill inv">Rechnung</span></td>
+                  <td class="dz-td-x">
+                    {#if onremove}
+                      <button type="button" class="dz-remove" onclick={() => remove(inv.row.rel)} aria-label={`${baseName(inv.row.rel)} entfernen`} use:tooltip={"Rechnung entfernen — zugeordnete Buchungen gelten wieder als offen"}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    {/if}
+                  </td>
                 </tr>
               {/each}
-              {#each result.emptyPdfs as f}
-                <tr><td class="dz-td-file">{baseName(f)}</td><td><span class="dz-pill skip">ohne Text</span></td></tr>
+              {#each result.emptyPdfs as f (f)}
+                <tr>
+                  <td class="dz-td-file">{baseName(f)}</td>
+                  <td><span class="dz-pill skip">ohne Text</span></td>
+                  <td class="dz-td-x">
+                    {#if onremove}
+                      <button type="button" class="dz-remove" onclick={() => remove(f)} aria-label={`${baseName(f)} entfernen`} use:tooltip={"Aus der Liste entfernen"}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    {/if}
+                  </td>
+                </tr>
               {/each}
             </tbody>
           </table>
@@ -207,18 +293,28 @@
       <svg class="dz-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 16V4m0 0L7 9m5-5 5 5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
       </svg>
-      <p class="dz-title">Auszug & Rechnungen hier ablegen</p>
-      <p class="dz-sub">
-        Ziehe einen Ordner oder einzelne PDFs hierher — Kontoauszug bzw.
-        Kreditkartenabrechnung und die zugehörigen Rechnungen.
-      </p>
+      {#if awaitingDemo}
+        <!-- The download just happened; the next move has to be obvious, or the
+             two PDFs sit in Downloads and nothing else occurs to anyone. -->
+        <p class="dz-title">Die zwei Demo-PDFs liegen jetzt in deinem Download-Ordner</p>
+        <p class="dz-sub" role="status">
+          Zieh sie von dort hierher — oder wähle sie über <strong>Dateien wählen</strong> aus.
+          Danach siehst du unten den fertigen Bericht.
+        </p>
+      {:else}
+        <p class="dz-title">Auszug & Rechnungen hier ablegen</p>
+        <p class="dz-sub">
+          Ziehe einen Ordner oder einzelne PDFs hierher — Kontoauszug bzw.
+          Kreditkartenabrechnung und die zugehörigen Rechnungen.
+        </p>
+      {/if}
       <div class="dz-actions">
         {#if canPickDir}
           <button type="button" class="dz-btn primary" onclick={pickFolder}>Ordner wählen</button>
         {:else}
           <button type="button" class="dz-btn primary" onclick={() => dirInput.click()}>Ordner wählen</button>
         {/if}
-        <button type="button" class="dz-btn" onclick={() => fileInput.click()}>Dateien wählen</button>
+        <button type="button" class="dz-btn" class:primary={awaitingDemo} onclick={() => fileInput.click()}>Dateien wählen</button>
       </div>
       {#if errorMsg}
         <p class="dz-error" role="alert">{errorMsg}</p>
@@ -240,6 +336,24 @@
     padding: 36px 28px;
     text-align: center;
     transition: border-color 0.15s ease, background-color 0.15s ease;
+  }
+  /* Waiting for the freshly downloaded demo files: the zone marks itself as the
+     next step, then settles. One pulse, not a loop — this is a pointer, not an
+     alarm. */
+  .dz.awaiting {
+    border-color: var(--accent-brand-deep);
+    border-style: solid;
+    background: var(--surface-callout-success);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .dz.awaiting {
+      animation: dz-notice 1.1s cubic-bezier(0.2, 0, 0, 1);
+    }
+    @keyframes dz-notice {
+      0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-brand) 55%, transparent); }
+      70% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--accent-brand) 0%, transparent); }
+      100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-brand) 0%, transparent); }
+    }
   }
   .dz.dragging {
     border-color: var(--accent-brand-deep);
@@ -427,6 +541,105 @@
   .dz-pill.stmt { background: var(--accent-tertiary); color: var(--text-inverse); }
   .dz-pill.inv { background: var(--accent-brand-deep); color: var(--text-inverse); }
   .dz-pill.skip { background: var(--text-muted); color: var(--text-inverse); }
+
+  /* The loaded statements, one row per file. Deliberately the widest, most
+     concrete thing in the success state — "did it read both?" is the first
+     question people have. */
+  .dz-sources {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: min(100%, 420px);
+    margin: 2px 0;
+    padding: 0;
+    text-align: left;
+  }
+  .dz-sources li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-panel-muted);
+  }
+  .dz-source-icon {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 1.3;
+    stroke-linejoin: round;
+  }
+  .dz-source-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.88rem;
+    font-weight: 650;
+    color: var(--text-primary);
+  }
+  /* In this list the type is secondary information — the filename is what you
+     came to read. Plain muted text, no pill. (The `li` keeps this ahead of
+     .dz-pill.stmt regardless of source order.) */
+  .dz-sources li .dz-pill {
+    flex: none;
+    padding: 0;
+    background: none;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .dz-sources li { animation: dz-source-in 0.3s cubic-bezier(0.2, 0, 0, 1) backwards; }
+    @keyframes dz-source-in {
+      from { opacity: 0; transform: translateY(-4px); }
+    }
+  }
+
+  /* Removing a document is destructive but instantly re-doable (drop the file
+     again), so it stays quiet until you're on the row. */
+  .dz-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0.55;
+    transition: opacity 0.14s ease, color 0.14s ease, background-color 0.14s ease, scale 0.12s ease;
+  }
+  .dz-remove svg {
+    width: 13px;
+    height: 13px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+  .dz-sources li:hover .dz-remove,
+  .dz-table tr:hover .dz-remove,
+  .dz-remove:focus-visible {
+    opacity: 1;
+  }
+  .dz-remove:hover {
+    opacity: 1;
+    color: var(--status-warn-text);
+    background: var(--status-warn-surface);
+  }
+  .dz-remove:active { scale: 0.9; }
+  .dz-td-x { width: 26px; text-align: right; }
 
   .dz-found {
     margin: 2px 0 0;
