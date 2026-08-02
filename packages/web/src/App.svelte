@@ -443,7 +443,7 @@
         <a href="/wissen/">Wissen</a>
         <a href="/datenschutz/">Datenschutz</a>
         <a href="/haftungsausschluss/">Haftungsausschluss</a>
-        <a href="https://needle.tools/imprint/" target="_blank" rel="noopener noreferrer">Impressum</a>
+        <a href="https://needle.tools/contact/#imprint" target="_blank" rel="noopener noreferrer">Impressum</a>
         <a href="https://github.com/needle-tools/belegabgleich" target="_blank" rel="noopener noreferrer">GitHub</a>
       </nav>
     </div>

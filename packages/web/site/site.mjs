@@ -20,9 +20,11 @@ export const SITE = {
   // The tool is made by Needle — the imprint is theirs, and so is the backlink.
   vendor: "Needle",
   vendorUrl: "https://needle.tools",
-  // Trailing slashes are the canonical form — needle.tools 301s to them.
-  vendorImprint: "https://needle.tools/imprint/",
-  vendorPrivacy: "https://needle.tools/privacy/",
+  // needle.tools serves its whole site from a catch-all, so a wrong path still
+  // answers 200 with the homepage. These two are the real anchors — verified
+  // against the ids on /contact/, not against the status code.
+  vendorImprint: "https://needle.tools/contact/#imprint",
+  vendorPrivacy: "https://needle.tools/contact/#privacy-policy",
   contactMail: "hi@needle.tools",
 };
 
