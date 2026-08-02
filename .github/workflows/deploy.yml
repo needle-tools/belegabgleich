@@ -36,10 +36,6 @@ jobs:
           token: ${{ secrets.NEEDLE_CLOUD_TOKEN }}
           name: kontoauszugs-helfer
           dir: ./packages/web/dist
-          # Unfurl rewrites <title> and og:title on EVERY page with the project's
-          # stored values, which would give all 15 pages one shared title and
-          # undo the per-page titles the site is split up for.
-          no-unfurl: true
 
       - name: Display deployment URL
         run: |

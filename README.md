@@ -130,6 +130,14 @@ Framework zur Laufzeit — nur `site.css` und ein kleines `site.js` fürs Menü)
 /app/                          das Tool (noindex)
 ```
 
+> **Offen beim Deployment:** Needle Cloud ersetzt beim Ausliefern den `<title>`
+> und `og:title` *jeder* Seite durch die im Projekt hinterlegten Werte (erkennbar
+> am eingefügten `<!-- Made with Needle -->`). Im Build stehen die richtigen,
+> seitenindividuellen Titel — ausgeliefert wird auf allen Seiten derselbe. Das
+> lässt sich nicht im Repo beheben (der `no-unfurl`-Input der Deploy-Action
+> betrifft nur Webhook-Nachrichten); es braucht eine Änderung an den
+> Projekteinstellungen in Needle Cloud.
+
 Inhalte werden in `site/pages.mjs` (Landing, Zielgruppen, Recht) und
 `site/articles.mjs` (Wissen) gepflegt, Layout und Meta-Tags in `site/layout.mjs`,
 wiederkehrende Abschnitte in `site/partials.mjs`. `site/build.mjs` schreibt daraus
