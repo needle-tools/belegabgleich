@@ -62,18 +62,35 @@
   </div>
 
   <div class="c-action">
-    {#if group.status !== "matched" && url}
-      <a
-        class="action"
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        onclick={(e) => { e.preventDefault(); openBeleg(url!); }}
-        use:tooltip={`Rechnungen bei ${provider} herunterladen (öffnet die Belegseite im Popup)`}
-      >
-        Beleg holen
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
-      </a>
+    {#if group.status !== "matched"}
+      {#if url}
+        <!-- One trip to the vendor covers every booking in the group, so this
+             deliberately skips the per-booking picker. -->
+        <a
+          class="action"
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onclick={(e) => { e.preventDefault(); openBeleg(url!); }}
+          use:tooltip={`Rechnungen bei ${provider} herunterladen (öffnet die Belegseite im Popup)`}
+        >
+          Beleg holen
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
+        </a>
+      {:else if !open}
+        <!-- Without a vendor link the row used to offer nothing at all, leaving the
+             chevron as the only (undiscoverable) way in. Each booking has its own
+             picker — so send the user there. -->
+        <button
+          type="button"
+          class="action"
+          onclick={toggle}
+          use:tooltip={"Einzelne Buchungen anzeigen und den Beleg je Buchung zuordnen"}
+        >
+          Einzeln zuordnen
+          <svg class="chev-action" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4" /></svg>
+        </button>
+      {/if}
     {/if}
   </div>
 </li>
@@ -179,6 +196,9 @@
     transition: background-color 0.15s ease, scale 0.12s ease;
     white-space: nowrap;
   }
+  /* The same affordance is an <a> (vendor page) or a <button> (expand), so the
+     button needs the element defaults stripped to match. */
+  button.action { border: none; cursor: pointer; font-family: var(--font-family-body); }
   .action svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .action:hover { background: var(--text-success); }
   .action:active { scale: 0.96; }
