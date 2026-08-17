@@ -2,9 +2,19 @@
   import ReportRow from "./ReportRow.svelte";
   import { tooltip } from "./tooltip";
   import { openBeleg } from "./openBeleg";
-  import { money, invoiceUrlFor, type EntryGroup } from "./report";
+  import { money, invoiceUrlFor, type EntryGroup, type ReportEntry } from "./report";
 
-  let { group, index = 0 }: { group: EntryGroup; index?: number } = $props();
+  let {
+    group,
+    index = 0,
+    onpick,
+  }: {
+    group: EntryGroup;
+    index?: number;
+    /** Opens the assign picker for ONE booking. Must reach the expanded child
+     *  rows — they carry their own "Beleg holen", and without it it does nothing. */
+    onpick?: (e: ReportEntry) => void;
+  } = $props();
 
   let open = $state(false);
   const toggle = () => (open = !open);
@@ -73,7 +83,7 @@
        differ only by transaction id, which dedupeCharges keeps them apart by), so
        provider+date+amount is not unique — the index is what separates them. -->
   {#each group.items as item, i (item.provider + item.date + item.amount + "#" + i)}
-    <ReportRow entry={item} child />
+    <ReportRow entry={item} child {onpick} />
   {/each}
 {/if}
 

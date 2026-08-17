@@ -751,7 +751,7 @@
           {#if group.items.length === 1}
             <ReportRow entry={group.items[0]} index={i} onpick={openPicker} />
           {:else}
-            <GroupRow {group} index={i} />
+            <GroupRow {group} index={i} onpick={openPicker} />
           {/if}
         {/each}
       </ul>
