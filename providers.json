@@ -78,6 +78,7 @@
     { "name": "Sentry", "aliases": ["sentry", "functional software"], "invoiceUrl": "https://sentry.io/settings/billing/receipts/" },
     { "name": "GoDaddy", "aliases": ["godaddy"], "invoiceUrl": "https://account.godaddy.com/billing" },
     { "name": "Namecheap", "aliases": ["namecheap"], "invoiceUrl": "https://ap.www.namecheap.com/billing/invoices" },
+    { "name": "Porkbun", "aliases": ["porkbun"], "invoiceUrl": "https://porkbun.com/account/orders" },
     { "name": "ClickUp", "aliases": ["clickup"], "invoiceUrl": "https://app.clickup.com/settings/billing" },
     { "name": "Linear", "aliases": ["linear.app", "linear"], "invoiceUrl": "https://linear.app/settings/billing" },
     { "name": "Monday.com", "aliases": ["monday.com", "monday"], "invoiceUrl": "" },
