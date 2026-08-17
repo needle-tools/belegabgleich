@@ -18,7 +18,9 @@ function deNum(s: string): number {
 // VISA line: "DD.MM.  DD.MM.  <merchant + location>  <amount><+|->"
 const VISA_TX = /^(\d{2})\.(\d{2})\.\s+(\d{2})\.(\d{2})\.\s+(.+?)\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s*([+-])\s*$/;
 // the original foreign principal, printed on the line below: "5,20  USD,  EURO-Kurs ..."
-const USD_LINE = /(\d{1,3}(?:\.\d{3})*,\d{2})\s+USD,\s*EURO-?Kurs/i;
+// Any ISO code, not just USD — a GBP/CHF/SEK charge is printed the same way and
+// used to fall through as a plain EUR amount.
+const FX_LINE = /(\d{1,3}(?:\.\d{3})*,\d{2})\s+([A-Za-z]{3}),\s*EURO-?Kurs/i;
 // Kontoauszug line: "DD.MM.YYYY <Erläuterung>  <signed amount>"
 const KONTO_TX = /^(\d{2})\.(\d{2})\.(\d{4})\s+(.+?)\s+(-?\d{1,3}(?:\.\d{3})*,\d{2})\s*$/;
 
@@ -38,8 +40,12 @@ export function parseVisaStatement(text: string, year: number): Charge[] {
     let amount = bookedEur, currency = "EUR";
     for (let j = i + 1; j <= i + 2 && j < lines.length; j++) {
       if (VISA_TX.test(lines[j])) break;
-      const u = lines[j].match(USD_LINE);
-      if (u) { amount = deNum(u[1]); currency = "USD"; break; } // match the invoice's original currency
+      const u = lines[j].match(FX_LINE);
+      if (u) { // match the invoice's original currency
+        const code = u[2].toUpperCase();
+        if (code !== "EUR") { amount = deNum(u[1]); currency = code; }
+        break;
+      }
     }
     const txMonth = +m[4];                                   // Belegtag month
     const txYear = txMonth > endMonth ? year - 1 : year;     // wrapped past year-end → previous year

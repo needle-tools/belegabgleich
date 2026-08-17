@@ -341,6 +341,61 @@ test("matchStatement: same-currency invoice wins over a differing-currency one",
   expect(r.matched[0].rows[0].provider).toBe("Gumroad B");
 });
 
+// --- foreign currency the statement never spelled out (pass 4) ---
+
+test("matchStatement: EUR-only charge links to a USD invoice via a plausible rate", () => {
+  const rows = [row({ provider: "fal.ai", total: "20.00", currency: "USD", date: "2026-06-18" })];
+  const r = matchStatement([{ date: "2026-06-18", merchant: "FAL-FEATURES-LABELS-FAL.AI-US", amount: 18.15, currency: "EUR" }], rows);
+  expect(r.matched).toHaveLength(1);
+  expect(r.matched[0].fx?.currency).toBe("USD");
+  expect(r.matched[0].fx?.rate).toBeCloseTo(0.9075, 4);
+  expect(r.missing).toHaveLength(0);
+});
+
+test("matchStatement: an implausible rate is left missing rather than force-matched", () => {
+  const rows = [row({ provider: "fal.ai", total: "60.00", currency: "USD", date: "2026-06-18" })];
+  const r = matchStatement([{ date: "2026-06-18", merchant: "FAL.AI", amount: 18.15, currency: "EUR" }], rows);
+  expect(r.matched).toHaveLength(0);      // 0,3025 €/USD is nonsense
+  expect(r.missing).toHaveLength(1);
+});
+
+test("matchStatement: a rate link never crosses vendors", () => {
+  const rows = [row({ provider: "Backblaze", total: "20.00", currency: "USD", date: "2026-06-18" })];
+  const r = matchStatement([{ date: "2026-06-18", merchant: "FAL.AI", amount: 18.15, currency: "EUR" }], rows);
+  expect(r.matched).toHaveLength(0);
+  expect(r.unmatchedInvoices).toHaveLength(1);
+});
+
+test("matchStatement: a rate link needs a nearby date", () => {
+  const rows = [row({ provider: "fal.ai", total: "20.00", currency: "USD", date: "2026-01-02" })];
+  const r = matchStatement([{ date: "2026-06-18", merchant: "FAL.AI", amount: 18.15, currency: "EUR" }], rows);
+  expect(r.matched).toHaveLength(0);
+});
+
+test("matchStatement: an exact total beats a merely plausible rate", () => {
+  const rows = [
+    row({ provider: "fal.ai", total: "20.00", currency: "USD", date: "2026-06-18", rel: "rate.pdf" }),
+    row({ provider: "fal.ai", total: "18.15", currency: "EUR", date: "2026-06-18", rel: "exact.pdf" }),
+  ];
+  const r = matchStatement([{ date: "2026-06-18", merchant: "FAL.AI", amount: 18.15, currency: "EUR" }], rows);
+  expect(r.matched).toHaveLength(1);
+  expect(r.matched[0].rows[0].rel).toBe("exact.pdf");
+  expect(r.matched[0].fx).toBeUndefined();
+});
+
+test("matchStatement: JPY and GBP invoices use their own rate bands", () => {
+  const gbp = matchStatement(
+    [{ date: "2026-06-18", merchant: "MONZO", amount: 23.4, currency: "EUR" }],
+    [row({ provider: "Monzo", total: "20.00", currency: "GBP", date: "2026-06-18" })],
+  );
+  expect(gbp.matched).toHaveLength(1);   // 1,17 €/GBP
+  const jpy = matchStatement(
+    [{ date: "2026-06-18", merchant: "PIXIV", amount: 19.5, currency: "EUR" }],
+    [row({ provider: "Pixiv", total: "3000", currency: "JPY", date: "2026-06-18" })],
+  );
+  expect(jpy.matched).toHaveLength(1);   // 0,0065 €/JPY
+});
+
 test("isStatementFile recognizes Kontoauszug + ABRECHNUNG names", () => {
   expect(isStatementFile("Konto_1234567890-Auszug_2025_0010.pdf")).toBe(true);
   expect(isStatementFile("1234_7890_ABRECHNUNG_2025-10-18_Name.PDF")).toBe(true);

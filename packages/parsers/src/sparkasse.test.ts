@@ -47,6 +47,20 @@ VISA  Summe     14,60-`;
   expect(c[1]).toMatchObject({ amount: 12, currency: "USD", date: "2026-01-15" }); // January → 2026
 });
 
+test("parseVisaStatement: non-USD foreign principals are read too, not flattened to EUR", () => {
+  const fixture = `VISA  1234  56XX  XXXX  7890  -  TEST
+Duplikat der Abrechnung/Saldenmitteilung bis zum 18.06.2026
+Saldovortrag  vom  18.05.2026     0,00+
+02.06.  01.06.  MONZO  BANK     LONDON     GB     23,40-
+20,00  GBP,  EURO-Kurs  0,854700
+10.06.  09.06.  PROTON  AG     GENEVA     CH     10,50-
+10,00  CHF,  EURO-Kurs  0,952400
+VISA  Summe     33,90-`;
+  const c = parseVisaStatement(fixture, 2026);
+  expect(c[0]).toMatchObject({ amount: 20, currency: "GBP", bookedEur: 23.4 });
+  expect(c[1]).toMatchObject({ amount: 10, currency: "CHF", bookedEur: 10.5 });
+});
+
 test("parseKontoauszug: emits debits only, abs amount, skips credits + balances", () => {
   const c = parseKontoauszug(KONTO_FIXTURE);
   expect(c).toHaveLength(1); // the credit (Überweisungsgutschr.) and balance lines are skipped

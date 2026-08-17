@@ -20,6 +20,19 @@
           "invoiceUrl": {
             "type": "string",
             "description": "Public page to download this vendor's invoices. Generic billing page only — never an account-specific URL."
+          },
+          "invoiceUrls": {
+            "type": "array",
+            "description": "For vendors that bill through several portals (e.g. Google: Payments Center, Cloud, Ads, Workspace). Shown as one button each. Same rule as invoiceUrl — generic pages only, never an account-specific URL. Listed before invoiceUrl, which stays the fallback for tools reading a single link.",
+            "items": {
+              "type": "object",
+              "required": ["label", "url"],
+              "additionalProperties": false,
+              "properties": {
+                "label": { "type": "string", "description": "Button text, e.g. \"Cloud Console\"." },
+                "url": { "type": "string", "description": "Generic invoice/billing page for that portal." }
+              }
+            }
           }
         }
       }

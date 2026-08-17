@@ -16,6 +16,14 @@
       : { text: entry.provider, truncatedOnly: true },
   );
 
+  // A Beleg linked via exchange rate carries a note saying so — surface it, since
+  // the amounts on screen (18,15 €) and in the PDF (20 $) won't look alike.
+  const matchedTip = $derived(
+    [entry.invoice ? `Zugeordneter Beleg: ${entry.invoice}` : "Ein passender Beleg wurde gefunden", entry.note]
+      .filter(Boolean)
+      .join(" · "),
+  );
+
   // "Beleg holen": open the assign picker. The vendor page is opened only when the
   // user clicks "herunterladen" inside it — a direct gesture, so it's never blocked.
   function pick() {
@@ -37,7 +45,7 @@
     {#if entry.status === "matched"}
       <span
         class="tag ok"
-        use:tooltip={entry.invoice ? `Zugeordneter Beleg: ${entry.invoice}` : "Ein passender Beleg wurde gefunden"}
+        use:tooltip={matchedTip}
       >
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
         Beleg da

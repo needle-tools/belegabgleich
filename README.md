@@ -77,9 +77,28 @@ Ein Eintrag sieht so aus:
   `cloudflare`. Beliebig viele; `*` als Platzhalter (`"google*ads"`).
 - **`invoiceUrl`** — die **generische** Rechnungs-/Beleg-Seite des Anbieters. Leer
   (`""`), wenn es keine stabile öffentliche URL gibt.
+- **`invoiceUrls`** *(optional)* — für Anbieter, die über **mehrere Portale**
+  abrechnen. Der Auszug verrät meist nicht, welches es war, also zeigt der
+  Beleg-Dialog einen Button pro Portal:
+
+  ```json
+  {
+    "name": "Google",
+    "aliases": ["google"],
+    "invoiceUrl": "https://payments.google.com/paymentsinfo",
+    "invoiceUrls": [
+      { "label": "Payments Center", "url": "https://payments.google.com/paymentsinfo" },
+      { "label": "Cloud Console",   "url": "https://console.cloud.google.com/billing" }
+    ]
+  }
+  ```
+
+  `invoiceUrl` bleibt daneben als Einzel-Link bestehen.
 
 > ⚠️ Niemals kontospezifische URLs oder IDs committen — nur die generische
-> Rechnungsseite.
+> Rechnungsseite. Deine eigene Billing-ID (z. B.
+> `console.cloud.google.com/billing/<ID>/invoices`) gehört **nicht** hierher:
+> trage sie lokal in deinem Fork ein oder setze ein Lesezeichen.
 
 Eine neue **Bank**? Implementiere das `BankParser`-Interface in `packages/parsers`
 (siehe `sparkasse.ts`) und registriere es. Die Engine sieht nur ein normalisiertes
@@ -221,8 +240,27 @@ Each entry looks like this:
   Add as many as needed; use `*` as a wildcard (`"google*ads"`).
 - **`invoiceUrl`** — the vendor's **generic** billing/receipts page. Leave it as
   `""` if there's no stable public URL.
+- **`invoiceUrls`** *(optional)* — for vendors that bill through **several
+  portals**. The statement rarely says which one was charged, so the Beleg dialog
+  renders one button per portal:
+
+  ```json
+  {
+    "name": "Google",
+    "aliases": ["google"],
+    "invoiceUrl": "https://payments.google.com/paymentsinfo",
+    "invoiceUrls": [
+      { "label": "Payments Center", "url": "https://payments.google.com/paymentsinfo" },
+      { "label": "Cloud Console",   "url": "https://console.cloud.google.com/billing" }
+    ]
+  }
+  ```
+
+  `invoiceUrl` stays alongside it as the single-link fallback.
 
 > ⚠️ Never commit account-specific URLs or IDs — only the generic billing page.
+> Your own billing id (e.g. `console.cloud.google.com/billing/<ID>/invoices`)
+> does **not** belong here: keep it in your local fork or a bookmark.
 
 Adding a **new bank?** Implement the `BankParser` interface in `packages/parsers`
 (see `sparkasse.ts`) and register it. The engine only ever sees a normalized

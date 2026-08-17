@@ -8,7 +8,8 @@ import { canon, configureAliases, groupRelated, type Charge, type MatchResult, t
 import { expectsNoInvoiceAny } from "@kah/parsers";
 import providersDoc from "../../../../providers.json";
 
-type ProviderEntry = { name: string; aliases: string[]; invoiceUrl?: string };
+export type InvoicePortal = { label: string; url: string };
+type ProviderEntry = { name: string; aliases: string[]; invoiceUrl?: string; invoiceUrls?: InvoicePortal[] };
 const providers = providersDoc.providers as ProviderEntry[];
 
 const invoiceUrlByProvider = new Map<string, string>(
@@ -17,6 +18,22 @@ const invoiceUrlByProvider = new Map<string, string>(
 
 export function invoiceUrlFor(provider: string): string | undefined {
   return invoiceUrlByProvider.get(provider);
+}
+
+// Some vendors bill through several portals (Google: Payments Center, Cloud,
+// Ads, Workspace) and the statement descriptor rarely says which one — so offer
+// them all rather than guessing. Vendors with a single link yield one portal,
+// which the picker renders exactly as before.
+const portalsByProvider = new Map<string, InvoicePortal[]>(
+  providers
+    .map((p) => [p.name, p.invoiceUrls?.length ? p.invoiceUrls : p.invoiceUrl ? [{ label: p.name, url: p.invoiceUrl }] : []] as const)
+    .filter(([, portals]) => portals.length)
+    .map(([name, portals]) => [name, portals as InvoicePortal[]]),
+);
+
+/** Every invoice portal known for a provider — empty when none is on file. */
+export function invoicePortalsFor(provider: string): InvoicePortal[] {
+  return portalsByProvider.get(provider) ?? [];
 }
 
 /** Public, alphabetically-sorted vendor list for the "supported providers" section. */
@@ -49,7 +66,8 @@ export type ReportEntry = {
   status: ReportStatus;
   /** display path of the matched invoice (status: matched) */
   invoice?: string;
-  /** why no Beleg is expected (status: no_invoice) */
+  /** why no Beleg is expected (status: no_invoice), or how a matched Beleg was
+   *  linked when it took an exchange rate rather than an equal total */
   note?: string;
   /** raw statement descriptor (carries the account id used for grouping) */
   merchant?: string;
@@ -113,7 +131,7 @@ export function buildReport(match: MatchResult, ordered?: readonly Charge[]): Re
   const position = new Map<Charge, number>();
   (ordered ?? []).forEach((c, i) => position.set(c, i));
 
-  for (const { charge, rows } of match.matched) {
+  for (const { charge, rows, fx } of match.matched) {
     entries.push({
       provider: canon(charge.merchant),
       date: charge.date,
@@ -122,6 +140,7 @@ export function buildReport(match: MatchResult, ordered?: readonly Charge[]): Re
       status: "matched",
       invoice: rows.map((r) => r.rel).join(", "),
       merchant: charge.merchant,
+      ...(fx ? { note: `Rechnung lautet auf ${fx.currency} — über den Kurs zugeordnet (1 ${fx.currency} ≈ ${rateFmt.format(fx.rate)} €)` } : {}),
       ...(position.has(charge) ? { order: position.get(charge) } : {}),
     });
   }
@@ -144,6 +163,8 @@ export function buildReport(match: MatchResult, ordered?: readonly Charge[]): Re
 }
 
 const eur = new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Rates need more than two decimals to stay meaningful (1 JPY ≈ 0,0065 €).
+const rateFmt = new Intl.NumberFormat("de-DE", { maximumSignificantDigits: 4 });
 export function money(amount: number, currency: string): string {
   const sym = currency === "EUR" ? "€" : currency === "USD" ? "$" : currency === "GBP" ? "£" : "";
   return sym ? `${eur.format(amount)} ${sym}` : `${eur.format(amount)} ${currency}`;

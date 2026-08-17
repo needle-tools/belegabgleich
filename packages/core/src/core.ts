@@ -479,7 +479,9 @@ export type Charge = {
 };
 
 export type MatchResult = {
-  matched: { charge: Charge; rows: Row[] }[];  // a charge linked to one or more invoice PDFs (split)
+  /** a charge linked to one or more invoice PDFs (split); `fx` is set only when
+   *  the link rests on a plausible exchange rate rather than an equal total */
+  matched: { charge: Charge; rows: Row[]; fx?: { currency: string; rate: number } }[];
   missing: Charge[];          // on the statement, but no invoice PDF in the folder
   unmatchedInvoices: Row[];   // invoice PDFs in the folder not tied to any charge (informational)
 };
@@ -538,6 +540,32 @@ function merchantProviderScore(merchant: string, provider: string): number {
   let hit = 0;
   for (const t of need) if (hay.has(t)) hit++;
   return hit / need.length;
+}
+
+/**
+ * Plausible EUR value of one unit of a foreign currency. A foreign charge is
+ * often booked in EUR only — the statement never prints the original principal —
+ * so no total can ever line up with an invoice denominated in USD/GBP/…. The
+ * implied rate is then the only link left. Bands are deliberately wide: they
+ * exist to rule out nonsense (a 25 USD invoice for an 18 EUR charge), not to pin
+ * down the day's rate, and they must absorb the card's ~1.5% Fremdwährungsentgelt,
+ * which pushes the booked EUR above a clean conversion.
+ */
+const FX_BAND: Record<string, [number, number]> = {
+  USD: [0.78, 1.05], GBP: [1.00, 1.35], CHF: [0.85, 1.15],
+  CAD: [0.58, 0.82], AUD: [0.50, 0.75], NZD: [0.48, 0.72],
+  JPY: [0.0050, 0.0090], SEK: [0.075, 0.110], NOK: [0.075, 0.110],
+  DKK: [0.128, 0.142], PLN: [0.19, 0.27], CZK: [0.034, 0.046],
+  HUF: [0.0021, 0.0031], INR: [0.0090, 0.0140], SGD: [0.58, 0.78],
+};
+// Unknown currency: only rule out the absurd. Safe because an FX link also
+// demands a provider hit and a nearby date.
+const FX_FALLBACK: [number, number] = [0.5, 1.5];
+
+/** What the bank actually debited in EUR, if we know it at all. */
+function eurValueOf(c: Charge): number | null {
+  if (c.bookedEur != null) return c.bookedEur;
+  return (c.currency || "EUR").toUpperCase() === "EUR" ? c.amount : null;
 }
 
 function daysApart(a: string, b: string): number {
@@ -629,6 +657,42 @@ export function matchStatement(charges: Charge[], rows: Row[]): MatchResult {
     chosen.forEach(k => matched.push({ charge: stillMissing[k], rows: [inv] }));
     stillMissing = stillMissing.filter((_, k) => !chosen.has(k));
   }
+
+  // Pass 4 — foreign-currency fallback, LAST so every exact reading wins first.
+  // The charge carries EUR only (18,15 €) while the invoice is denominated in
+  // another currency (20 $), so no total can ever line up. Link them when the
+  // implied rate is plausible — but only with a provider hit and a nearby date,
+  // because a rate band alone is far too weak to link on.
+  const fxEdges: { k: number; ri: number; score: number; rate: number }[] = [];
+  stillMissing.forEach((charge, k) => {
+    const eur = eurValueOf(charge);
+    if (eur == null || eur <= 0) return;
+    const chargeCur = (charge.currency || "EUR").toUpperCase();
+    rows.forEach((r, ri) => {
+      if (consumed.has(ri)) return;
+      const total = parseFloat(r.total);
+      if (!isFinite(total) || total <= 0) return;
+      const cur = (r.currency || "").toUpperCase();
+      if (!cur || cur === "EUR" || cur === chargeCur) return; // same currency → pass 1 already had its chance
+      const prov = merchantProviderScore(charge.merchant, r.provider);
+      if (prov <= 0) return;                                  // never guess across vendors
+      const days = daysApart(charge.date, r.date);
+      if (days > 40) return;
+      const rate = eur / total;
+      const [lo, hi] = FX_BAND[cur] ?? FX_FALLBACK;
+      if (rate < lo || rate > hi) return;
+      fxEdges.push({ k, ri, score: prov * 10 - days / 40, rate });
+    });
+  });
+  fxEdges.sort((a, b) => b.score - a.score);
+  const fxUsed = new Set<number>();
+  for (const e of fxEdges) {
+    if (fxUsed.has(e.k) || consumed.has(e.ri)) continue;
+    fxUsed.add(e.k); consumed.add(e.ri);
+    const inv = rows[e.ri];
+    matched.push({ charge: stillMissing[e.k], rows: [inv], fx: { currency: (inv.currency || "").toUpperCase(), rate: e.rate } });
+  }
+  stillMissing = stillMissing.filter((_, k) => !fxUsed.has(k));
 
   const unmatchedInvoices = rows.filter((_, i) => !consumed.has(i));
   return { matched, missing: stillMissing, unmatchedInvoices };

@@ -8,7 +8,7 @@
    */
   import { collectFromDataTransfer, collectFromFileList, type CollectedPdf } from "./collect";
   import { openBeleg } from "./openBeleg";
-  import { money, dDate, invoiceUrlFor, type ReportEntry } from "./report";
+  import { money, dDate, invoicePortalsFor, type ReportEntry } from "./report";
   import type { RunResult } from "./engine";
 
   let {
@@ -42,7 +42,10 @@
     note?: string;
   } = $props();
 
-  const url = $derived(invoiceUrlFor(entry.provider));
+  const portals = $derived(invoicePortalsFor(entry.provider));
+  // Vendors that bill through several portals get one button each; with a single
+  // portal the header keeps its plain "Quelle öffnen" shortcut.
+  const url = $derived(portals.length === 1 ? portals[0].url : undefined);
 
   let dragging = $state(false);
   let depth = 0;
@@ -124,9 +127,19 @@
 
     <section class="block">
       <h3>Beleg noch nicht dabei?</h3>
-      {#if url}
+      {#if portals.length > 1}
+        <p>{entry.provider} rechnet über mehrere Portale ab — der Auszug verrät nicht, welches. Öffne das passende und lege die Rechnung unten ab.</p>
+        <div class="portals">
+          {#each portals as p (p.url)}
+            <button type="button" class="ghost" onclick={() => openBeleg(p.url)}>
+              {p.label}
+              <svg class="ext" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
+            </button>
+          {/each}
+        </div>
+      {:else if portals.length === 1}
         <p>Bei {entry.provider} herunterladen und unten ablegen.</p>
-        <button type="button" class="primary" onclick={() => openBeleg(url)}>
+        <button type="button" class="primary" onclick={() => openBeleg(portals[0].url)}>
           Rechnung bei {entry.provider} herunterladen
           <svg class="ext" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
         </button>
@@ -294,6 +307,8 @@
     color: var(--text-secondary);
     font-size: 0.82rem;
   }
+
+  .portals { display: flex; flex-wrap: wrap; gap: 8px; }
 
   .block { margin-bottom: 16px; }
   .block h3 { font-size: 0.98rem; font-weight: 700; margin-bottom: 6px; }
