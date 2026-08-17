@@ -8,7 +8,7 @@
    * the same classes as those pages (styled in public/site.css) so moving
    * between them doesn't feel like two different sites.
    */
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import CompletenessMeter from "./lib/CompletenessMeter.svelte";
   import ReportRow from "./lib/ReportRow.svelte";
   import GroupRow from "./lib/GroupRow.svelte";
@@ -19,7 +19,9 @@
   import { MOCK_ENTRIES, MOCK_PERIOD, MOCK_STATEMENT, DEMO_SOURCE_PATHS } from "./lib/mock";
   import { summarize, groupEntries, type ReportEntry } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
-  import type { CollectedPdf } from "./lib/collect";
+  import { collectFromDirectory, type CollectedPdf, type FsDirHandle } from "./lib/collect";
+  import { watchFolder } from "./lib/folder";
+  import { fileIntoFolder, type FileTarget } from "./lib/filing";
   import { downloadCsv } from "./lib/csv";
   import { tooltip } from "./lib/tooltip";
   import { saveSession, loadSession, clearSession } from "./lib/persist";
@@ -76,14 +78,16 @@
     { id: "all", label: "Alle", count: entries.length },
   ]);
 
-  async function onLoad(pdfs: CollectedPdf[]): Promise<RunResult | null> {
+  /** `auto`: added by the folder watcher rather than by the user — don't count it
+   *  as a folder selection and don't yank the filter out from under them. */
+  async function onLoad(pdfs: CollectedPdf[], opts: { auto?: boolean } = {}): Promise<RunResult | null> {
     busy = true;
     errorMsg = "";
     // Accumulate across drops/picks so several folders or files can be added.
     const seen = new Set(sources.map((p) => p.rel));
     const merged = [...sources, ...pdfs.filter((p) => !seen.has(p.rel))];
     sources = merged;
-    track("folder_selected", { bucket: bucket(merged.length) });
+    if (!opts.auto) track("folder_selected", { bucket: bucket(merged.length) });
     try {
       // Lazy-load the engine so pdf.js (the heavy chunk) only downloads on first use.
       const { run, addInvoices } = await import("./lib/engine");
@@ -95,7 +99,7 @@
         ? await addInvoices(result, pdfs, onP)
         : await run(merged, onP);
       result = r;
-      filter = "missing";
+      if (!opts.auto) filter = "missing";
       saveSession(r); // survive a refresh (local only)
       track("statement_detected", { parser: r.parserIds[0] });
       track("report_generated", { bucket: bucket(r.entries.length) });
@@ -133,15 +137,72 @@
     }
   }
 
+  // ---- filing a dropped Beleg into the folder it belongs to -----------------
+
+  /** Display path of the statement a booking came from. With several statements
+   *  loaded, the one that actually carries this charge. */
+  function statementRelFor(entry: ReportEntry): string | undefined {
+    const srcs = result?.statementSources ?? [];
+    if (!srcs.length) return result?.statementFiles?.[0];
+    if (srcs.length === 1) return srcs[0].rel;
+    const hit = srcs.find((s) =>
+      s.charges.some((c) => c.date === entry.date && Math.abs(c.amount - entry.amount) <= 0.01),
+    );
+    return (hit ?? srcs[0]).rel;
+  }
+
   /**
-   * The "Beleg zuordnen" picker: match the dropped invoice against the report
-   * that's currently on screen — the user's result, or the demo (seeded on
+   * Where a Beleg for this booking belongs: the folder holding its statement —
+   * usually a per-month subfolder, and the invoices belong next to it rather than
+   * in the top folder. Null when the files didn't come from the folder picker
+   * (a plain drag-and-drop gives no writable handle), which keeps the old
+   * memory-only behaviour.
+   */
+  function targetFor(entry: ReportEntry | undefined): FileTarget | null {
+    if (!entry || !result) return null;
+    const rel = statementRelFor(entry);
+    const root = rel ? sources.find((p) => p.rel === rel)?.root : undefined;
+    if (!rel || !root) return null;
+    // rel is "<root name>/<sub>/<file>.pdf" — drop the root name and the file name.
+    const parts = rel.split("/");
+    parts.shift();
+    parts.pop();
+    const subdir = parts.join("/");
+    return { root, subdir, label: subdir ? `${root.name}/${subdir}` : root.name };
+  }
+
+  /** Folder a drop in the open picker would be saved to, for the picker's hint. */
+  const pickerTarget = $derived(pickerEntry ? targetFor(pickerEntry) : null);
+  // Outcome of the last picker drop, shown in its feedback block.
+  let filedTo = $state<string[]>([]);
+  let filedExisting = $state<string[]>([]);
+  let filedDenied = $state(false);
+
+  /**
+   * The "Beleg zuordnen" picker: file the dropped invoice into the folder next to
+   * its statement (canonical name, nothing overwritten), then match it against the
+   * report that's currently on screen — the user's result, or the demo (seeded on
    * demand). Returns the updated result so the picker can report the outcome.
    */
-  async function onAssign(pdfs: CollectedPdf[]): Promise<RunResult | null> {
+  async function onAssign(pdfs: CollectedPdf[], entry?: ReportEntry): Promise<RunResult | null> {
     busy = true;
     errorMsg = "";
+    filedTo = [];
+    filedExisting = [];
+    filedDenied = false;
     try {
+      // Only ever write for the user's own report — the demo has no folder.
+      const filed = await fileIntoFolder(pdfs, result ? targetFor(entry) : null);
+      filedTo = filed.saved;
+      filedExisting = filed.existing;
+      filedDenied = filed.denied;
+      pdfs = filed.pdfs;
+      // Filed documents are part of the folder now; remember them so the watcher
+      // doesn't read them back in as a second copy.
+      if (filed.saved.length || filed.existing.length) {
+        const known = new Set(sources.map((p) => p.rel));
+        sources = [...sources, ...pdfs.filter((p) => !known.has(p.rel))];
+      }
       const { addInvoices } = await import("./lib/engine");
       if (result) {
         result = await addInvoices(result, pdfs);
@@ -164,6 +225,66 @@
       progress = null;
     }
   }
+
+  // ---- keeping the report in step with the folder ---------------------------
+  // A PDF saved into the picked folder (by this app, by the browser's download, or
+  // by hand) is read and matched on its own — no second drop, no "read again".
+  // Only folders picked through the directory picker can be watched; dropped files
+  // give no handle to watch.
+
+  const watchedRoots = $derived([
+    ...new Set(sources.map((p) => p.root).filter((r): r is FsDirHandle => !!r)),
+  ]);
+  // Identity of the watched set, so re-reading a folder doesn't rebuild watchers.
+  const watchKey = $derived(watchedRoots.map((r) => r.name).join("|"));
+  /** Short note in the dropzone when the watcher added something. */
+  let autoNotice = $state("");
+  let autoTimer: ReturnType<typeof setTimeout> | undefined;
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  const dirtyRoots = new Set<FsDirHandle>();
+
+  function scheduleRescan(root: FsDirHandle) {
+    dirtyRoots.add(root);
+    clearTimeout(autoTimer);
+    // Coalesce bursts (a ZIP unpacked into the folder drops many files at once),
+    // and wait until the engine is idle — a run of our own writes files too.
+    autoTimer = setTimeout(() => {
+      if (busy) return scheduleRescan(root);
+      const roots = [...dirtyRoots];
+      dirtyRoots.clear();
+      rescan(roots);
+    }, 800);
+  }
+
+  /** Read the watched folders again and feed anything new into the report. */
+  async function rescan(roots: FsDirHandle[]) {
+    const known = new Set(sources.map((p) => p.rel));
+    const fresh: CollectedPdf[] = [];
+    for (const root of roots) {
+      try {
+        for (const pdf of await collectFromDirectory(root)) if (!known.has(pdf.rel)) fresh.push(pdf);
+      } catch {
+        /* access revoked or folder gone — nothing to add */
+      }
+    }
+    if (!fresh.length) return;
+    await onLoad(fresh, { auto: true });
+    autoNotice = `${fresh.length} neue ${fresh.length === 1 ? "Datei" : "Dateien"} aus dem Ordner ergänzt`;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => (autoNotice = ""), 8000);
+  }
+
+  $effect(() => {
+    watchKey;
+    if (!watchKey) return;
+    const stops = untrack(() => watchedRoots).map((root) =>
+      watchFolder(root, () => scheduleRescan(root)),
+    );
+    return () => {
+      stops.forEach((stop) => stop());
+      clearTimeout(autoTimer);
+    };
+  });
 
   /**
    * Drop a single loaded document from the report, together with what it
@@ -256,7 +377,16 @@
 <DropOverlay onload={onLoad} disabled={busy || pickerEntry !== null} />
 
 {#if pickerEntry}
-  <PickerModal entry={pickerEntry} loadError={errorMsg} onload={onAssign} onclose={() => (pickerEntry = null)} />
+  <PickerModal
+    entry={pickerEntry}
+    loadError={errorMsg}
+    onload={onAssign}
+    onclose={() => (pickerEntry = null)}
+    targetLabel={pickerTarget?.label ?? ""}
+    saved={filedTo}
+    existing={filedExisting}
+    denied={filedDenied}
+  />
 {/if}
 
 <div class="header-pill-shell">
@@ -335,7 +465,7 @@
 
   <!-- UPLOAD -->
   <section class="upload" id="upload" bind:this={uploadEl}>
-    <Dropzone onload={onLoad} onreset={reset} onremove={onRemove} {busy} {progress} {result} {errorMsg} {awaitingDemo} />
+    <Dropzone onload={onLoad} onreset={reset} onremove={onRemove} {busy} {progress} {result} {errorMsg} {awaitingDemo} notice={autoNotice} />
   </section>
 
   <!-- REPORT SHELL -->

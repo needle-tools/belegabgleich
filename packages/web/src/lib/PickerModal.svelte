@@ -17,14 +17,26 @@
     onclose,
     live = true,
     loadError = "",
+    targetLabel = "",
+    saved = [],
+    existing = [],
+    denied = false,
   }: {
     entry: ReportEntry;
-    onload: (pdfs: CollectedPdf[]) => Promise<RunResult | null> | void;
+    onload: (pdfs: CollectedPdf[], entry: ReportEntry) => Promise<RunResult | null> | void;
     onclose: () => void;
     /** false when the report is still showing demo data (no real statement loaded). */
     live?: boolean;
     /** the App's last load error, shown when a re-run yields no result. */
     loadError?: string;
+    /** Folder a dropped Beleg is filed into (empty when nothing can be written). */
+    targetLabel?: string;
+    /** Paths written by the last drop, relative to the picked folder. */
+    saved?: string[];
+    /** Paths that were already in the folder — same document, nothing written. */
+    existing?: string[];
+    /** Write access was refused — the Beleg was matched but not saved. */
+    denied?: boolean;
   } = $props();
 
   const url = $derived(invoiceUrlFor(entry.provider));
@@ -50,9 +62,10 @@
     if (!pdfs.length) { feedback = { kind: "empty" }; return; }
     busy = true;
     feedback = null;
-    // add to the pool + re-run; matchStatement links by amount. Await so we can
-    // tell the user whether THIS booking actually got its Beleg.
-    const res = await onload(pdfs);
+    // File it into the folder next to its statement, add to the pool + re-run;
+    // matchStatement links by amount. Await so we can tell the user whether THIS
+    // booking actually got its Beleg.
+    const res = await onload(pdfs, entry);
     busy = false;
     if (!res) { feedback = { kind: "error" }; return; }
     const inv = assignedInvoice(res, entry);
@@ -142,7 +155,14 @@
           <path d="M12 16V4m0 0L7 9m5-5 5 5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
         </svg>
         <p><strong>PDF oder ZIP hierher ziehen</strong> (oder klicken)</p>
-        <p class="muted">Wird gescannt und gegen diese Buchung geprüft. ZIPs werden ausgepackt, Duplikate übersprungen.</p>
+        {#if targetLabel}
+          <p class="muted">
+            Wird in <strong class="dz-target">{targetLabel}</strong> abgelegt — passend
+            benannt, neben den Auszug — und gegen diese Buchung geprüft.
+          </p>
+        {:else}
+          <p class="muted">Wird gescannt und gegen diese Buchung geprüft. ZIPs werden ausgepackt, Duplikate übersprungen.</p>
+        {/if}
       {/if}
     </div>
 
@@ -152,13 +172,21 @@
           <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
           <div>
             <strong>Beleg zugeordnet.</strong>
-            {#if feedback.invoice}<span class="fb-sub">{feedback.invoice}</span>{/if}
+            {#if saved.length}
+              <span class="fb-sub">Gespeichert als {saved.join(", ")}{targetLabel ? ` in ${targetLabel.split("/")[0]}` : ""}.</span>
+            {:else if existing.length}
+              <span class="fb-sub">Lag schon im Ordner: {existing.join(", ")} — nichts doppelt gespeichert.</span>
+            {:else if feedback.invoice}
+              <span class="fb-sub">{feedback.invoice}</span>
+            {/if}
+            {#if denied}<span class="fb-sub">Ohne Schreibzugriff nur im Bericht — die Datei bleibt im Download-Ordner.</span>{/if}
           </div>
         {:else if feedback.kind === "nomatch"}
           <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4v5M8 11.5v.5" /></svg>
           <div>
             <strong>Beleg hinzugefügt, aber kein Treffer für diese Buchung.</strong>
             <span class="fb-sub">Erwartet wird {money(entry.amount, entry.currency)} um den {dDate(entry.date)}. Lege den passenden Beleg ab oder prüfe Betrag/Datum.</span>
+            {#if saved.length}<span class="fb-sub">Gespeichert als {saved.join(", ")} — bei Bedarf dort wieder löschen.</span>{/if}
           </div>
         {:else if feedback.kind === "empty"}
           <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4v5M8 11.5v.5" /></svg>
@@ -304,6 +332,7 @@
   }
   .dropzone p { margin: 2px 0; font-size: 0.9rem; color: var(--text-primary); }
   .dropzone p.muted { color: var(--text-muted); font-size: 0.8rem; }
+  .dz-target { color: var(--text-secondary); font-weight: 700; overflow-wrap: anywhere; }
   .dropzone.busy { cursor: default; border-style: solid; border-color: var(--border-subtle); }
 
   .spinner {

@@ -13,12 +13,16 @@ import type { Src } from "@kah/core";
 
 /** Minimal File System Access handle shapes we use (the DOM lib types vary). */
 export type FsPerm = "granted" | "denied" | "prompt";
+/** Writable stream from createWritable() — only the two calls we make. */
+export type FsWritable = { write(data: BufferSource): Promise<void>; close(): Promise<void> };
 export type FsFileHandle = {
   kind: "file";
   name: string;
   getFile(): Promise<File>;
   /** Rename within the same directory (Chromium ≥110). Present ⇒ in-place rename possible. */
   move?(name: string): Promise<void>;
+  /** Write access (Chromium). Present ⇒ a downloaded Beleg can be filed into the folder. */
+  createWritable?(): Promise<FsWritable>;
   requestPermission?(o: { mode: "read" | "readwrite" }): Promise<FsPerm>;
   queryPermission?(o: { mode: "read" | "readwrite" }): Promise<FsPerm>;
 };
@@ -26,6 +30,8 @@ export type FsDirHandle = {
   kind: "directory";
   name: string;
   entries(): AsyncIterableIterator<[string, FsFileHandle | FsDirHandle]>;
+  getFileHandle?(name: string, o?: { create?: boolean }): Promise<FsFileHandle>;
+  getDirectoryHandle?(name: string, o?: { create?: boolean }): Promise<FsDirHandle>;
   requestPermission?(o: { mode: "read" | "readwrite" }): Promise<FsPerm>;
   queryPermission?(o: { mode: "read" | "readwrite" }): Promise<FsPerm>;
 };
@@ -128,20 +134,27 @@ async function walkHandle(
   }
 }
 
+/** Read every PDF beneath an already-granted directory handle. Used by the picker
+ *  and by the folder watcher, which re-reads the same root when files appear. */
+export async function collectFromDirectory(root: FsDirHandle, onFound?: OnFound): Promise<CollectedPdf[]> {
+  const out: CollectedPdf[] = [];
+  await walkHandle(root, root.name, out, root, onFound);
+  return out;
+}
+
 /** Open the native folder picker and read every PDF beneath it. Null if cancelled. */
 export async function collectFromDirectoryPicker(onFound?: OnFound): Promise<CollectedPdf[] | null> {
   const picker = (window as WindowWithPicker).showDirectoryPicker;
   if (!picker) return null;
   let root: FsDirHandle;
   try {
-    // Read-only to scan; readwrite is requested lazily only when renaming.
+    // Read-only to scan; readwrite is requested lazily only when renaming or
+    // filing a dropped Beleg into the folder.
     root = await picker({ mode: "read" });
   } catch {
     return null; // user cancelled the dialog
   }
-  const out: CollectedPdf[] = [];
-  await walkHandle(root, root.name, out, root, onFound);
-  return out;
+  return collectFromDirectory(root, onFound);
 }
 
 // ---- 3) Drag-and-drop of files AND folders (webkitGetAsEntry) ----

@@ -8,6 +8,13 @@
     onpick,
   }: { entry: ReportEntry; index?: number; child?: boolean; onpick?: (e: ReportEntry) => void } = $props();
   const url = $derived(entry.status === "missing" ? invoiceUrlFor(entry.provider) : undefined);
+  // With a Beleg in hand, the useful thing on hover is WHERE it is — its path
+  // inside the picked folder. Without one, fall back to revealing a clipped name.
+  const nameTip = $derived(
+    entry.status === "matched" && entry.invoice
+      ? { text: `${entry.provider} · ${entry.invoice}` }
+      : { text: entry.provider, truncatedOnly: true },
+  );
 
   // "Beleg holen": open the assign picker. The vendor page is opened only when the
   // user clicks "herunterladen" inside it — a direct gesture, so it's never blocked.
@@ -19,7 +26,7 @@
 <li class="row" class:child style={`--i:${index}`} data-status={entry.status}>
   <div class="c-name">
     <span class="dot" aria-hidden="true"></span>
-    <span class="provider" use:tooltip={{ text: entry.provider, truncatedOnly: true }}>{entry.provider}</span>
+    <span class="provider" use:tooltip={nameTip}>{entry.provider}</span>
   </div>
 
   <span class="c-date">{dDate(entry.date)}</span>

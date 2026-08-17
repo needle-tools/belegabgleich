@@ -15,6 +15,15 @@
     group.status === "matched" ? "Beleg da" : group.status === "mixed" ? "teilweise belegt" : "Beleg fehlt",
   );
   const statusCls = $derived(group.status === "matched" ? "ok" : "warn");
+  // Like a single row: with Belege in hand, hovering the name shows where they are.
+  const invoices = $derived([
+    ...new Set(group.items.map((i) => i.invoice).filter((v): v is string => !!v)),
+  ]);
+  const nameTip = $derived(
+    invoices.length
+      ? { text: `${provider} · ${invoices.join(" · ")}` }
+      : { text: provider, truncatedOnly: true },
+  );
 </script>
 
 <li class="row group-parent" data-status={group.status} style={`--i:${index}`}>
@@ -28,7 +37,7 @@
     >
       <svg class="chev" class:open viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4" /></svg>
       <span class="dot" aria-hidden="true"></span>
-      <span class="provider" use:tooltip={{ text: provider, truncatedOnly: true }}>{provider}</span>
+      <span class="provider" use:tooltip={nameTip}>{provider}</span>
     </button>
   </div>
 

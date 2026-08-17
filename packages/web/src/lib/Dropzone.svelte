@@ -19,8 +19,11 @@
     errorMsg = "",
     awaitingDemo = false,
     onremove,
+    notice = "",
   }: {
     onload: (pdfs: CollectedPdf[]) => void;
+    /** Transient status from the folder watcher ("2 neue Dateien ergänzt"). */
+    notice?: string;
     onreset?: () => void;
     /** Drop a single loaded document (by display path) from the report. */
     onremove?: (rel: string) => void;
@@ -201,6 +204,12 @@
         {/if}
         — <a class="dz-link" href="#report">siehe Tabelle unten</a>
       </p>
+      {#if notice}
+        <p class="dz-notice" role="status">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
+          {notice}
+        </p>
+      {/if}
 
       <div class="dz-actions">
         {#if canPickDir}
@@ -647,6 +656,28 @@
     font-size: 0.95rem;
   }
   .dz-found strong { color: var(--status-warn-text); font-variant-numeric: tabular-nums; }
+  /* The folder watcher speaking up — quiet, and it disappears again on its own. */
+  .dz-notice {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--surface-callout-success);
+    color: var(--text-success);
+    font-size: 0.82rem;
+    font-weight: 650;
+  }
+  .dz-notice svg {
+    width: 13px;
+    height: 13px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
   .dz-link {
     color: var(--accent-brand-deep);
     font-weight: 700;
