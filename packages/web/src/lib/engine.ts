@@ -293,7 +293,10 @@ export async function addInvoices(
         if (!sources.some((s) => s.rel === p.rel)) {
           sources.push({ rel: p.rel, label: p.label, parserId: p.parserId, charges: p.charges });
         }
-      } else {
+      } else if (!legacyFiles.includes(p.rel)) {
+        // Same guard as the attributed branch above: re-reading a folder must not
+        // append the statement a second time — that would double every charge on
+        // it, and the two arrays are index-matched, so they move together.
         legacyCharges.push(...p.charges);
         legacyStatements.push(p.label);
         legacyFiles.push(p.rel);
@@ -304,7 +307,7 @@ export async function addInvoices(
         invoices.push(p.item);
         seen.add(p.item.row.rel);
       }
-    } else {
+    } else if (!emptyPdfs.includes(p.rel)) {
       emptyPdfs.push(p.rel);
     }
     onProgress?.({ done: i + 1, total: pdfs.length, name: pdf.rel });

@@ -69,7 +69,10 @@
 </li>
 
 {#if open}
-  {#each group.items as item (item.provider + item.date + item.amount)}
+  <!-- Two charges from one vendor can genuinely share a day and an amount (they
+       differ only by transaction id, which dedupeCharges keeps them apart by), so
+       provider+date+amount is not unique — the index is what separates them. -->
+  {#each group.items as item, i (item.provider + item.date + item.amount + "#" + i)}
     <ReportRow entry={item} child />
   {/each}
 {/if}
