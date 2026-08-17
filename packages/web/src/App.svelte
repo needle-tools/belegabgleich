@@ -17,7 +17,7 @@
   import PickerModal from "./lib/PickerModal.svelte";
   import RenamePanel from "./lib/RenamePanel.svelte";
   import { MOCK_ENTRIES, MOCK_PERIOD, MOCK_STATEMENT, DEMO_SOURCE_PATHS } from "./lib/mock";
-  import { summarize, groupEntries, type ReportEntry } from "./lib/report";
+  import { summarize, groupEntries, byAmountDesc, type ReportEntry } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
   import { collectFromDirectory, type CollectedPdf, type FsDirHandle } from "./lib/collect";
   import { watchFolder, ensureWritable, ensureReadable, deleteFromFolder } from "./lib/folder";
@@ -71,11 +71,12 @@
 
   // How the rows are ordered. A–Z first: looking for one vendor's Beleg is the
   // common move, and an alphabetical list is the one you can scan without reading.
-  type Sort = "abc" | "date" | "doc";
+  type Sort = "abc" | "date" | "amount" | "doc";
   let sort = $state<Sort>("abc");
   const SORTS: { id: Sort; label: string; hint: string }[] = [
     { id: "abc", label: "A–Z", hint: "Nach Anbieter alphabetisch" },
     { id: "date", label: "Datum", hint: "Neueste Buchung zuerst" },
+    { id: "amount", label: "Betrag", hint: "Größte Buchung zuerst — nach dem in Euro gebuchten Betrag" },
     { id: "doc", label: "Dokument", hint: "In der Reihenfolge, in der die Buchungen im Auszug stehen" },
   ];
   const byName = (a: ReportEntry, b: ReportEntry) =>
@@ -90,7 +91,9 @@
       ? (a: ReportEntry, b: ReportEntry) => byName(a, b) || byDate(a, b)
       : sort === "date"
         ? (a: ReportEntry, b: ReportEntry) => byDate(a, b) || byName(a, b)
-        : (a: ReportEntry, b: ReportEntry) => byDoc(a, b) || byDate(a, b),
+        : sort === "amount"
+          ? (a: ReportEntry, b: ReportEntry) => byAmountDesc(a, b) || byName(a, b)
+          : (a: ReportEntry, b: ReportEntry) => byDoc(a, b) || byDate(a, b),
   );
 
   const visible = $derived(

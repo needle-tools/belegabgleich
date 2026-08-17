@@ -207,7 +207,12 @@
     </div>
 
     {#if note}
-      <p class="filing-note" role="status">{note}</p>
+      <!-- This only ever appears when filing did NOT happen — the feature's whole
+           promise. Neutral blue read as "just so you know"; it's a warning. -->
+      <p class="filing-warn" role="status">
+        <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4v5M8 11.5v.5" /></svg>
+        <span>{note}</span>
+      </p>
     {/if}
 
     {#if feedback}
@@ -221,7 +226,10 @@
             {:else if existing.length}
               <span class="fb-sub">Lag schon im Ordner: {existing.join(", ")} — nichts doppelt gespeichert.</span>
             {:else if feedback.invoice}
-              <span class="fb-sub">{feedback.invoice}</span>
+              <!-- Nothing was filed, so nothing was renamed either: the PDF keeps
+                   the name it was downloaded under. Say so, or "Beleg zugeordnet"
+                   next to "Heroku _ Invoice.pdf" just looks broken. -->
+              <span class="fb-sub">Nur im Bericht: {feedback.invoice} — die Datei bleibt liegen, wo sie ist, und behält ihren Namen.</span>
             {/if}
           </div>
         {:else if feedback.kind === "nomatch"}
@@ -395,7 +403,7 @@
   .dropzone p { margin: 2px 0; font-size: 0.9rem; color: var(--text-primary); }
   .dropzone p.muted { color: var(--text-muted); font-size: 0.8rem; }
   .dz-target { color: var(--text-secondary); font-weight: 700; overflow-wrap: anywhere; }
-  .filing-note {
+  .filing-note, .filing-warn {
     margin: 10px 0 0;
     padding: 9px 11px;
     border-radius: var(--radius-card);
@@ -404,6 +412,14 @@
     color: var(--text-secondary);
     font-size: 0.82rem;
     line-height: 1.45;
+  }
+  .filing-warn {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    background: #fdf3e7;
+    color: #9a5b1a;
+    border-color: #f0d8b6;
   }
   .dropzone.busy { cursor: default; border-style: solid; border-color: var(--border-subtle); }
 

@@ -562,8 +562,9 @@ const FX_BAND: Record<string, [number, number]> = {
 // demands a provider hit and a nearby date.
 const FX_FALLBACK: [number, number] = [0.5, 1.5];
 
-/** What the bank actually debited in EUR, if we know it at all. */
-function eurValueOf(c: Charge): number | null {
+/** What the bank actually debited in EUR, if we know it at all. Null for a
+ *  foreign charge whose statement never printed the EUR side. */
+export function eurValueOf(c: Charge): number | null {
   if (c.bookedEur != null) return c.bookedEur;
   return (c.currency || "EUR").toUpperCase() === "EUR" ? c.amount : null;
 }

@@ -4,7 +4,7 @@
  * provider→invoice-URL lookup (from the repo-root providers.json). Building a
  * report from the matching engine lives in {@link buildReport}.
  */
-import { canon, configureAliases, groupRelated, type Charge, type MatchResult, type ChargeGroup } from "@kah/core";
+import { canon, configureAliases, eurValueOf, groupRelated, type Charge, type MatchResult, type ChargeGroup } from "@kah/core";
 import { expectsNoInvoiceAny } from "@kah/parsers";
 import providersDoc from "../../../../providers.json";
 
@@ -69,12 +69,25 @@ export type ReportEntry = {
   /** why no Beleg is expected (status: no_invoice), or how a matched Beleg was
    *  linked when it took an exchange rate rather than an equal total */
   note?: string;
+  /** what the bank actually debited in EUR — the only figure comparable across
+   *  rows, since `amount` may be USD, GBP or JPY. Absent when unknown. */
+  eur?: number;
   /** raw statement descriptor (carries the account id used for grouping) */
   merchant?: string;
   /** Position of the charge in the statement, so the report can be put back into
    *  the order the document prints it — absent on demo rows and older sessions. */
   order?: number;
 };
+
+/**
+ * Biggest booking first — the point of sorting by amount is finding the Belege
+ * worth chasing. Compares the EUR the bank actually booked, never the raw
+ * `amount`: those are in whatever the vendor billed, so 3.000 ¥ beside 20 $ would
+ * order by nothing at all. A foreign charge whose statement never printed the EUR
+ * side keeps its own figure — imperfect, but better than dropping it out of order.
+ */
+export const byAmountDesc = (a: ReportEntry, b: ReportEntry): number =>
+  (b.eur ?? b.amount) - (a.eur ?? a.amount);
 
 /** A group of related report rows (recurring same-account or one-invoice). */
 export type EntryGroup = ChargeGroup<ReportEntry & { merchant: string }>;
@@ -139,6 +152,7 @@ export function buildReport(match: MatchResult, ordered?: readonly Charge[]): Re
       currency: charge.currency || "EUR",
       status: "matched",
       invoice: rows.map((r) => r.rel).join(", "),
+      ...(eurValueOf(charge) != null ? { eur: eurValueOf(charge) as number } : {}),
       merchant: charge.merchant,
       ...(fx ? { note: `Rechnung lautet auf ${fx.currency} — über den Kurs zugeordnet (1 ${fx.currency} ≈ ${rateFmt.format(fx.rate)} €)` } : {}),
       ...(position.has(charge) ? { order: position.get(charge) } : {}),
@@ -154,6 +168,7 @@ export function buildReport(match: MatchResult, ordered?: readonly Charge[]): Re
       currency: charge.currency || "EUR",
       status: noInvoice ? "no_invoice" : "missing",
       ...(noInvoice ? { note: noInvoiceNote(charge.merchant) } : {}),
+      ...(eurValueOf(charge) != null ? { eur: eurValueOf(charge) as number } : {}),
       merchant: charge.merchant,
       ...(position.has(charge) ? { order: position.get(charge) } : {}),
     });

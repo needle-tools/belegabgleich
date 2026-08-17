@@ -26,16 +26,16 @@ export const DEMO_SOURCE_PATHS = [
 ];
 
 export const MOCK_ENTRIES: ReportEntry[] = [
-  { provider: "GitHub", date: "2025-09-18", amount: 21, currency: "USD", status: "matched", invoice: "invoices/GitHub-2025-09-18.pdf", merchant: "GITHUB, INC. GITHUB.COM US" },
+  { provider: "GitHub", date: "2025-09-18", amount: 21, currency: "USD", eur: 19.07, status: "matched", invoice: "invoices/GitHub-2025-09-18.pdf", merchant: "GITHUB, INC. GITHUB.COM US" },
   { provider: "Hetzner", date: "2025-09-19", amount: 188.01, currency: "EUR", status: "matched", invoice: "invoices/Hetzner-2025-09-19.pdf", merchant: "HETZNER ONLINE GMBH hetzner.com" },
-  { provider: "Cloudflare", date: "2025-09-21", amount: 25, currency: "USD", status: "matched", invoice: "invoices/Cloudflare-2025-09-21.pdf", merchant: "CLOUDFLARE CLOUDFLARE.COUS" },
+  { provider: "Cloudflare", date: "2025-09-21", amount: 25, currency: "USD", eur: 22.70, status: "matched", invoice: "invoices/Cloudflare-2025-09-21.pdf", merchant: "CLOUDFLARE CLOUDFLARE.COUS" },
   { provider: "Anthropic", date: "2025-09-21", amount: 100, currency: "EUR", status: "matched", invoice: "invoices/Anthropic-2025-09-21.pdf", merchant: "CLAUDE.AI SUBSCRIPTION ANTHROPIC.COMUS" },
-  { provider: "Backblaze", date: "2025-09-26", amount: 41.2, currency: "USD", status: "matched", invoice: "invoices/Backblaze-2025-09-25.pdf", merchant: "BACKBLAZE INC BACKBLAZE.COMUS" },
+  { provider: "Backblaze", date: "2025-09-26", amount: 41.2, currency: "USD", eur: 37.41, status: "matched", invoice: "invoices/Backblaze-2025-09-25.pdf", merchant: "BACKBLAZE INC BACKBLAZE.COMUS" },
   { provider: "Google Cloud", date: "2025-10-01", amount: 142.8, currency: "EUR", status: "matched", invoice: "invoices/GoogleCloud-2025-10-01.pdf", merchant: "GOOGLE*CLOUD 3QVCTG CC GOOGLE.COMIE" },
   { provider: "Stadtwerke-Musterstadt", date: "2025-10-10", amount: 179, currency: "EUR", status: "matched", invoice: "invoices/Stadtwerke-2025-10-10.pdf", merchant: "Stadtwerke Musterstadt GmbH" },
 
-  { provider: "OpenAI", date: "2025-10-08", amount: 120, currency: "USD", status: "missing", merchant: "OPENAI OPENAI.COM US" },
-  { provider: "Cloudflare", date: "2025-10-17", amount: 80, currency: "USD", status: "missing", merchant: "CLOUDFLARE CLOUDFLARE.COUS" },
+  { provider: "OpenAI", date: "2025-10-08", amount: 120, currency: "USD", eur: 108.96, status: "missing", merchant: "OPENAI OPENAI.COM US" },
+  { provider: "Cloudflare", date: "2025-10-17", amount: 80, currency: "USD", eur: 72.64, status: "missing", merchant: "CLOUDFLARE CLOUDFLARE.COUS" },
   { provider: "Muster-Hosting", date: "2025-10-06", amount: 149.9, currency: "EUR", status: "missing", merchant: "Muster Hosting GmbH" },
   { provider: "Muster-Immobilien", date: "2025-10-15", amount: 2400, currency: "EUR", status: "missing", merchant: "Muster Immobilien GmbH" },
 
