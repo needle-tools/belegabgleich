@@ -20,7 +20,7 @@
   import { summarize, groupEntries, type ReportEntry } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
   import { collectFromDirectory, type CollectedPdf, type FsDirHandle } from "./lib/collect";
-  import { watchFolder, ensureWritable, ensureReadable } from "./lib/folder";
+  import { watchFolder, ensureWritable, ensureReadable, deleteFromFolder } from "./lib/folder";
   import { fileIntoFolder, type FileTarget } from "./lib/filing";
   import { downloadCsv } from "./lib/csv";
   import { tooltip } from "./lib/tooltip";
@@ -245,6 +245,9 @@
   let filedTo = $state<string[]>([]);
   let filedExisting = $state<string[]>([]);
   let filedDenied = $state(false);
+  /** What the last drop wrote, so it can be taken back out again. Only ever the
+   *  files THIS drop created — never one that was already in the folder. */
+  let undoable = $state<{ root: FsDirHandle; files: { path: string; rel: string }[] } | null>(null);
   /** Why a Beleg wasn't filed — never leave that silent, it's the whole feature. */
   const filingNote = $derived(
     !live
@@ -268,9 +271,12 @@
     filedTo = [];
     filedExisting = [];
     filedDenied = false;
+    undoable = null;
     try {
       // Only ever write for the user's own report — the demo has no folder.
-      const filed = await fileIntoFolder(pdfs, result ? targetFor(entry) : null);
+      const target = result ? targetFor(entry) : null;
+      const filed = await fileIntoFolder(pdfs, target);
+      if (target && filed.written.length) undoable = { root: target.root, files: filed.written };
       filedTo = filed.saved;
       filedExisting = filed.existing;
       filedDenied = filed.denied;
@@ -301,6 +307,49 @@
     } finally {
       busy = false;
       progress = null;
+    }
+  }
+
+  /**
+   * Undo the last drop's filing: delete the files it wrote and take them back out
+   * of the report. Dropping the wrong Beleg on a booking is easy to do and, until
+   * now, only fixable by hunting the file down in Explorer — so the way out
+   * belongs next to the message that announced the write.
+   *
+   * Strictly limited to `undoable`, i.e. files this drop created. A Beleg that was
+   * already in the folder is never touched: the user didn't just put it there, so
+   * deleting it would destroy data instead of undoing an action.
+   */
+  async function onUndoFiling(): Promise<boolean> {
+    if (!undoable) return false;
+    const { root, files } = undoable;
+    busy = true;
+    try {
+      for (const f of files) await deleteFromFolder(root, f.path);
+      const gone = new Set(files.map((f) => f.rel));
+      sources = sources.filter((p) => !gone.has(p.rel));
+      if (result) {
+        const { removeDocument } = await import("./lib/engine");
+        let next: RunResult | null = result;
+        for (const f of files) {
+          if (!next) break;
+          next = removeDocument(next, f.rel);
+        }
+        if (next) {
+          result = next;
+          saveSession(result);
+        }
+      }
+      console.info(`[filing] zurückgenommen: ${files.map((f) => f.path).join(", ")}`);
+      filedTo = [];
+      filedExisting = [];
+      undoable = null;
+      return true;
+    } catch (e) {
+      console.warn("[filing] Rücknahme fehlgeschlagen:", e);
+      return false;
+    } finally {
+      busy = false;
     }
   }
 
@@ -536,6 +585,7 @@
     existing={filedExisting}
     denied={filedDenied}
     note={filingNote}
+    onundo={undoable ? onUndoFiling : undefined}
   />
 {/if}
 

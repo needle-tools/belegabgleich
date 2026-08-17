@@ -22,6 +22,7 @@
     existing = [],
     denied = false,
     note = "",
+    onundo,
   }: {
     entry: ReportEntry;
     onload: (pdfs: CollectedPdf[], entry: ReportEntry) => Promise<RunResult | null> | void;
@@ -40,6 +41,9 @@
     denied?: boolean;
     /** Why nothing could be filed into the folder (empty when it worked). */
     note?: string;
+    /** Delete the files this drop just wrote and undo its effect on the report.
+     *  Absent when nothing was written — then there is nothing to take back. */
+    onundo?: () => Promise<boolean>;
   } = $props();
 
   const portals = $derived(invoicePortalsFor(entry.provider));
@@ -52,6 +56,20 @@
   let busy = $state(false);
   let feedback = $state<null | { kind: "matched" | "nomatch" | "empty" | "error"; invoice?: string }>(null);
   let fileInput: HTMLInputElement;
+  /** null = nothing taken back yet; "done"/"failed" = outcome of the last try. */
+  let undone = $state<null | "done" | "failed">(null);
+  let undoing = $state(false);
+  /** Either job blocks the dropzone; they say different things while they run. */
+  const working = $derived(busy || undoing);
+
+  async function undo() {
+    if (!onundo || working) return;
+    undoing = true;
+    const ok = await onundo();
+    undoing = false;
+    undone = ok ? "done" : "failed";
+    if (ok) feedback = null; // the drop is gone — its verdict no longer applies
+  }
 
   /** Did THIS booking get a Beleg after the re-run? Matched by date + amount (+ provider). */
   function assignedInvoice(res: RunResult, e: ReportEntry): string | null {
@@ -68,6 +86,7 @@
     if (!pdfs.length) { feedback = { kind: "empty" }; return; }
     busy = true;
     feedback = null;
+    undone = null; // a fresh drop supersedes whatever the last one did
     // File it into the folder next to its statement, add to the pool + re-run;
     // matchStatement links by amount. Await so we can tell the user whether THIS
     // booking actually got its Beleg.
@@ -151,21 +170,26 @@
     <div
       class="dropzone"
       class:dragging
-      class:busy
+      class:busy={working}
       role="button"
       tabindex="0"
-      aria-busy={busy}
-      onclick={() => { if (!busy) fileInput.click(); }}
-      onkeydown={(e) => { if (!busy && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fileInput.click(); } }}
+      aria-busy={working}
+      onclick={() => { if (!working) fileInput.click(); }}
+      onkeydown={(e) => { if (!working && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fileInput.click(); } }}
       ondrop={onDrop}
       ondragover={(e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; }}
-      ondragenter={(e) => { e.preventDefault(); if (busy) return; depth++; dragging = true; }}
+      ondragenter={(e) => { e.preventDefault(); if (working) return; depth++; dragging = true; }}
       ondragleave={() => { if (--depth <= 0) { depth = 0; dragging = false; } }}
     >
-      {#if busy}
+      {#if working}
         <span class="spinner" aria-hidden="true"></span>
-        <p><strong>Wird geprüft …</strong></p>
-        <p class="muted">PDF wird gelesen und gegen diese Buchung abgeglichen.</p>
+        {#if undoing}
+          <p><strong>Wird entfernt …</strong></p>
+          <p class="muted">Die abgelegte Datei wird gelöscht und aus dem Bericht genommen.</p>
+        {:else}
+          <p><strong>Wird geprüft …</strong></p>
+          <p class="muted">PDF wird gelesen und gegen diese Buchung abgeglichen.</p>
+        {/if}
       {:else}
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 16V4m0 0L7 9m5-5 5 5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
@@ -205,7 +229,7 @@
           <div>
             <strong>Beleg hinzugefügt, aber kein Treffer für diese Buchung.</strong>
             <span class="fb-sub">Erwartet wird {money(entry.amount, entry.currency)} um den {dDate(entry.date)}. Lege den passenden Beleg ab oder prüfe Betrag/Datum.</span>
-            {#if saved.length}<span class="fb-sub">Gespeichert als {saved.join(", ")} — bei Bedarf dort wieder löschen.</span>{/if}
+            {#if saved.length}<span class="fb-sub">Gespeichert als {saved.join(", ")}.</span>{/if}
           </div>
         {:else if feedback.kind === "empty"}
           <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4v5M8 11.5v.5" /></svg>
@@ -218,6 +242,23 @@
           </div>
         {/if}
       </div>
+    {/if}
+
+    {#if onundo && saved.length && undone !== "done"}
+      <div class="undo-bar">
+        <span>Doch nicht der richtige Beleg? {saved.length === 1 ? "Die Datei wird" : "Die Dateien werden"} wieder aus dem Ordner gelöscht.</span>
+        <button type="button" class="ghost danger" onclick={undo} disabled={working}>
+          {saved.length === 1 ? "Datei entfernen" : "Dateien entfernen"}
+        </button>
+      </div>
+    {/if}
+
+    {#if undone === "done"}
+      <p class="filing-note" role="status">Wieder entfernt — Ordner und Bericht stehen wie vorher.</p>
+    {:else if undone === "failed"}
+      <p class="filing-note" role="status">
+        Entfernen hat nicht geklappt — bitte {saved.join(", ")} direkt im Ordner löschen.
+      </p>
     {/if}
 
     <footer class="modal-foot">
@@ -394,6 +435,28 @@
   .fb.ok { background: var(--surface-callout-success); color: var(--text-success); border-color: color-mix(in srgb, var(--text-success) 25%, transparent); }
   .fb.warn { background: #fdf3e7; color: #9a5b1a; border-color: #f0d8b6; }
   .fb.err { background: #fde9e6; color: #a23a2a; border-color: #f3c8c1; }
+
+  .undo-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius-card);
+    border: 1px solid var(--border-subtle);
+    background: var(--surface-page);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+  .undo-bar span { flex: 1 1 12rem; }
+  /* Deleting a file is the one irreversible thing this dialog does — the button
+     says so in colour, without shouting louder than the primary action. */
+  .ghost.danger { min-height: 34px; padding: 0 12px; font-size: 0.82rem; color: #a23a2a; }
+  .ghost.danger:hover { border-color: #a23a2a; }
+  .ghost.danger:disabled { opacity: 0.5; cursor: default; }
 
   .modal-foot { display: flex; justify-content: flex-end; margin-top: 18px; }
 

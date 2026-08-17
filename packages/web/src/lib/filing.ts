@@ -22,6 +22,9 @@ export type FilingResult = {
   pdfs: CollectedPdf[];
   /** Paths (relative to the picked folder) actually written. */
   saved: string[];
+  /** The same writes, with the rel the report knows them by — enough to undo them.
+   *  Only files created by THIS call; never anything that was already there. */
+  written: { path: string; rel: string }[];
   /** Paths that were already in the folder — the same document, not written again. */
   existing: string[];
   /** True when write access was refused — nothing was written, matching still runs. */
@@ -54,20 +57,20 @@ async function targetName(pdf: CollectedPdf): Promise<string> {
 export async function fileIntoFolder(pdfs: CollectedPdf[], target: FileTarget | null): Promise<FilingResult> {
   if (!target) {
     console.info("[filing] kein Zielordner — der Beleg bleibt nur im Bericht");
-    return { pdfs, saved: [], existing: [], denied: false };
+    return { pdfs, saved: [], written: [], existing: [], denied: false };
   }
   if (!canWriteInto(target.root)) {
     console.info(`[filing] „${target.label}" ist nicht beschreibbar (kein Verzeichnis-Handle)`);
-    return { pdfs, saved: [], existing: [], denied: false };
+    return { pdfs, saved: [], written: [], existing: [], denied: false };
   }
   if (!(await ensureWritable(target.root))) {
     console.info(`[filing] Schreibzugriff auf „${target.label}" nicht erteilt`);
-    return { pdfs, saved: [], existing: [], denied: true };
+    return { pdfs, saved: [], written: [], existing: [], denied: true };
   }
   console.info(`[filing] lege ${pdfs.length} PDF in „${target.label}" ab`);
 
   const out: CollectedPdf[] = [];
-  const saved: string[] = [];
+  const written: { path: string; rel: string }[] = [];
   const existing: string[] = [];
   for (const pdf of pdfs) {
     try {
@@ -81,7 +84,7 @@ export async function fileIntoFolder(pdfs: CollectedPdf[], target: FileTarget | 
       // watcher recognizes it as one we already know (it prefixes the root's name,
       // and nothing when the handle has none).
       const rel = target.root.name ? `${target.root.name}/${path}` : path;
-      (duplicate ? existing : saved).push(path);
+      if (duplicate) existing.push(path); else written.push({ path, rel });
       console.info(`[filing] ${duplicate ? "lag schon da" : "gespeichert"}: ${rel}`);
       out.push({ src: { kind: "file", path: rel }, rel, data: pdf.data, handle, root: target.root });
     } catch (e) {
@@ -89,5 +92,5 @@ export async function fileIntoFolder(pdfs: CollectedPdf[], target: FileTarget | 
       out.push(pdf); // writing failed for this one — keep matching it from memory
     }
   }
-  return { pdfs: out, saved, existing, denied: false };
+  return { pdfs: out, saved: written.map((w) => w.path), written, existing, denied: false };
 }

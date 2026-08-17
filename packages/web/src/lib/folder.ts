@@ -107,6 +107,30 @@ export async function saveIntoFolder(
   return { path: rel(finalName), handle, duplicate: false };
 }
 
+/**
+ * Delete a file at `path` (relative to the picked root).
+ *
+ * Deliberately narrow: this exists so a Beleg that was just filed into the wrong
+ * place can be taken back out again, and the caller must only ever pass a path
+ * that THIS session wrote. A file that was already in the folder is never a
+ * candidate — the user didn't put it there just now, so removing it would be
+ * destroying data rather than undoing an action.
+ */
+export async function deleteFromFolder(root: FsDirHandle, path: string): Promise<void> {
+  // "..", "." and blank segments are dropped, not followed: a path may only ever
+  // name a place inside the folder the user actually picked.
+  const parts = path.split("/").filter((p) => p.trim() && p !== "." && p !== "..");
+  const name = parts.pop();
+  if (!name) throw new Error("Kein Dateiname");
+  let dir = root;
+  for (const part of parts) {
+    if (!dir.getDirectoryHandle) throw new Error("Ordner kann nicht geöffnet werden");
+    dir = await dir.getDirectoryHandle(part);
+  }
+  if (!dir.removeEntry) throw new Error("Dieser Browser kann keine Dateien löschen");
+  await dir.removeEntry(name);
+}
+
 // ---- watching -------------------------------------------------------------
 
 type ObserverCtor = new (cb: (records: unknown[]) => void) => {

@@ -32,6 +32,8 @@ export type FsDirHandle = {
   entries(): AsyncIterableIterator<[string, FsFileHandle | FsDirHandle]>;
   getFileHandle?(name: string, o?: { create?: boolean }): Promise<FsFileHandle>;
   getDirectoryHandle?(name: string, o?: { create?: boolean }): Promise<FsDirHandle>;
+  /** Delete an entry (Chromium). Only ever used to undo a write from this session. */
+  removeEntry?(name: string, o?: { recursive?: boolean }): Promise<void>;
   requestPermission?(o: { mode: "read" | "readwrite" }): Promise<FsPerm>;
   queryPermission?(o: { mode: "read" | "readwrite" }): Promise<FsPerm>;
 };
