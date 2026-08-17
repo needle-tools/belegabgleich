@@ -129,10 +129,20 @@ async function parsePdf(pdf: CollectedPdf): Promise<Parsed> {
       rel: pdf.rel,
     };
   }
-  const { fields } = extractFields(text);
+  const { fields, altTotals } = extractFields(text);
   return {
     kind: "invoice",
-    item: { row: { ...fields, rel: pdf.rel, src: pdf.src, proposed: buildProposed(fields), hasText: true }, pdf },
+    item: {
+      row: {
+        ...fields,
+        rel: pdf.rel,
+        src: pdf.src,
+        proposed: buildProposed(fields),
+        hasText: true,
+        ...(altTotals.length ? { altTotals } : {}),
+      },
+      pdf,
+    },
   };
 }
 

@@ -341,6 +341,61 @@ test("matchStatement: same-currency invoice wins over a differing-currency one",
   expect(r.matched[0].rows[0].provider).toBe("Gumroad B");
 });
 
+// --- running accounts: the debit settles the PREVIOUS period ---
+
+const GCLOUD = `Google Cloud
+Zusammenfassung für den Zeitraum 1. Juli 2026–31. Juli 2026
+Anfangsguthaben vom 1. Juli 2026    22,33 €
+Neue Aktivitäten insgesamt    24,01 €
+Erhaltene Zahlungen insgesamt    -22,33 €
+Endsaldo in EUR    24,01 €`;
+
+test("extractFields keeps the settled prior balance alongside the total", () => {
+  const { fields, altTotals } = extractFields(GCLOUD);
+  expect(fields.total).toBe("24.01");   // the document's own figure is unchanged
+  expect(altTotals).toEqual([22.33]);   // …and the balance it pays off is kept too
+});
+
+test("extractFields reports no carried amount for an ordinary invoice", () => {
+  const { altTotals } = extractFields("Hetzner Online GmbH\nRechnungsdatum 04.06.2026\nGesamtbetrag 188,01 €");
+  expect(altTotals).toEqual([]);
+});
+
+test("matchStatement links a charge that pays off the prior balance", () => {
+  const { fields, altTotals } = extractFields(GCLOUD);
+  const rows = [row({ ...fields, provider: "Google Cloud", date: "2026-07-31", altTotals })];
+  const r = matchStatement(
+    [{ date: "2026-07-01", merchant: "GOOGLE*CLOUD 1234 CC GOOGLE.COMIE", amount: 22.33, currency: "EUR" }],
+    rows,
+  );
+  expect(r.matched).toHaveLength(1);
+  expect(r.missing).toHaveLength(0);
+});
+
+test("matchStatement prefers the invoice whose OWN total is the charge", () => {
+  // Both July's PDF (carries 22,33 as a prior balance) and June's (total 22,33)
+  // are in the folder. June's must win — it is what that debit actually paid.
+  const rows = [
+    row({ provider: "Google Cloud", total: "24.01", date: "2026-07-31", rel: "juli.pdf", altTotals: [22.33] }),
+    row({ provider: "Google Cloud", total: "22.33", date: "2026-06-30", rel: "juni.pdf" }),
+  ];
+  const r = matchStatement(
+    [{ date: "2026-07-01", merchant: "GOOGLE*CLOUD 1234 CC GOOGLE.COMIE", amount: 22.33, currency: "EUR" }],
+    rows,
+  );
+  expect(r.matched[0].rows[0].rel).toBe("juni.pdf");
+});
+
+test("matchStatement will not link a carried balance across vendors", () => {
+  const rows = [row({ provider: "Backblaze", total: "24.01", date: "2026-07-31", altTotals: [22.33] })];
+  const r = matchStatement(
+    [{ date: "2026-07-01", merchant: "GOOGLE*CLOUD 1234 CC GOOGLE.COMIE", amount: 22.33, currency: "EUR" }],
+    rows,
+  );
+  expect(r.matched).toHaveLength(0);
+  expect(r.missing).toHaveLength(1);
+});
+
 // --- foreign currency the statement never spelled out (pass 4) ---
 
 test("matchStatement: EUR-only charge links to a USD invoice via a plausible rate", () => {

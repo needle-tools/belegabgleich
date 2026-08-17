@@ -27,6 +27,9 @@ export type Row = Fields & {
   proposed: string;
   hasText: boolean;
   dirId?: string;     // which selected folder this row came from (multi-folder scans)
+  /** Amounts this document settles besides `total` — a prior balance it pays off.
+   *  Matching may link a charge to one of these, but only as a weaker reading. */
+  altTotals?: number[];
 };
 
 export type ScanOpts = { depth?: number; zipMaxBytes?: number };
@@ -288,6 +291,38 @@ function findTotal(lines: string[]): MoneyHit | null {
   return best?.hit ?? null;
 }
 
+/**
+ * Labels for an amount a running-account document SETTLES rather than charges.
+ *
+ * Google Cloud's monthly summary is the case that forced this: the bank debit on
+ * 01.07. pays off June, which appears on the July document only as
+ * "Anfangsguthaben" and "Erhaltene Zahlungen" (22,33 €), while the document's own
+ * total is July's new balance (24,01 €). Matching on the total alone can never
+ * link that charge to that PDF.
+ */
+const CARRIED_LABEL = /(anfangs(?:guthaben|saldo)|er[oö]ffnungssaldo|saldovortrag|[uü]bertrag|vorheriger saldo|erhaltene zahlungen|zahlungseingang|bereits (?:bezahlt|beglichen)|previous balance|opening balance|balance (?:forward|brought forward)|payments? (?:received|applied)|amount paid)/i;
+
+/**
+ * Amounts such a document settles, other than its own total. Deliberately narrow:
+ * only lines carrying one of those labels, so this adds a couple of candidates
+ * rather than every number on the page.
+ */
+function findCarriedAmounts(lines: string[], total: number | null): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!CARRIED_LABEL.test(lines[i])) continue;
+    let hits = moneyOnLine(lines[i]);
+    if (!hits.length && i + 1 < lines.length) hits = moneyOnLine(lines[i + 1]);
+    for (const h of hits) {
+      const v = Math.abs(h.amount); // "Erhaltene Zahlungen" prints as a negative
+      if (v <= 0.005) continue;
+      if (total != null && Math.abs(v - total) <= 0.01) continue; // same as the total: nothing new
+      if (!out.some((x) => Math.abs(x - v) <= 0.01)) out.push(v);
+    }
+  }
+  return out;
+}
+
 const INV_RX = /(?:rechnungs?-?\s*(?:nummer|nr)\.?|invoice\s*(?:number|no|#)\.?|beleg-?\s*(?:nummer|nr)\.?|rg-?\s*nr\.?|document\s*(?:number|no)\.?|receipt\s*(?:number|no)\.?|order\s*(?:number|no|#)\.?|facture\s*(?:n[o°]|#)?|ref(?:erence)?\.?\s*(?:no|number|#)?)\s*[:#.]?\s*([A-Za-z0-9][A-Za-z0-9/_.\-]{1,40})/i;
 const DATE_STRONG = /(rechnungsdatum|datum der rechnung|rechnung vom|invoice date|bill date|date of issue|date paid|belegdatum|ausstellungsdatum|issued on|issue date|date de facture|fecha)\s*[:#]?\s*([^\n]{0,28})/i;
 const DATE_WEAK = /\b(datum|date|vom)\b\s*[:#]?\s*([^\n]{0,28})/i;
@@ -345,7 +380,12 @@ const CUR_FALLBACK: [RegExp, string][] = [
   [/\bchf\b|\bfr\.?\b/i, "CHF"], [/¥|\bjpy\b/i, "JPY"], [/₹|\binr\b/i, "INR"],
 ];
 
-export type Extraction = { fields: Fields; complete: boolean };
+export type Extraction = {
+  fields: Fields;
+  complete: boolean;
+  /** Amounts this document settles besides its own total (see findCarriedAmounts). */
+  altTotals: number[];
+};
 
 /**
  * Best-effort deterministic extraction of the six invoice fields from PDF text.
@@ -392,7 +432,7 @@ export function extractFields(text: string, customer = ""): Extraction {
     total: total ? String(total.amount) : "",
   };
   const complete = !!known && !!date && !!fields.total;
-  return { fields, complete };
+  return { fields, complete, altTotals: findCarriedAmounts(lines, total ? total.amount : null) };
 }
 
 /**
@@ -593,14 +633,24 @@ export function matchStatement(charges: Charge[], rows: Row[]): MatchResult {
   charges.forEach((charge, ci) => {
     rows.forEach((r, ri) => {
       const total = parseFloat(r.total);
-      if (!isFinite(total)) return;
-      const hit = Math.abs(total - charge.amount) <= 0.01
-        || (charge.bookedEur != null && Math.abs(total - charge.bookedEur) <= 0.01);
+      // The document's own total first, then any prior balance it settles — a
+      // running account (Google Cloud) debits last period on this period's PDF.
+      const targets: { value: number; carried: boolean }[] = [];
+      if (isFinite(total)) targets.push({ value: total, carried: false });
+      for (const a of r.altTotals ?? []) targets.push({ value: a, carried: true });
+      const hit = targets.find((t) =>
+        Math.abs(t.value - charge.amount) <= 0.01
+        || (charge.bookedEur != null && Math.abs(t.value - charge.bookedEur) <= 0.01));
       if (!hit) return;
+      const prov = merchantProviderScore(charge.merchant, r.provider);
+      // A carried balance is a secondary figure on the page, so it brings more
+      // false-match surface than a total does. Require the vendor to line up.
+      if (hit.carried && prov <= 0) return;
       const sameCur = !!charge.currency && !!r.currency && charge.currency.toUpperCase() === r.currency.toUpperCase();
       const diffCur = !!charge.currency && !!r.currency && !sameCur;
-      const score = merchantProviderScore(charge.merchant, r.provider) * 10
+      const score = prov * 10
         + (sameCur ? 2 : 0) - (diffCur ? 1 : 0)
+        - (hit.carried ? 4 : 0) // any invoice matching on its own total outranks this
         - daysApart(charge.date, r.date) / 365;
       edges.push({ ci, ri, score });
     });
