@@ -26,6 +26,18 @@ export async function ensureWritable(root: FsDirHandle): Promise<boolean> {
   }
 }
 
+/** Re-grant read access to a folder restored from a previous session. */
+export async function ensureReadable(root: FsDirHandle): Promise<boolean> {
+  const opts = { mode: "read" } as const;
+  if (root.queryPermission && (await root.queryPermission(opts)) === "granted") return true;
+  if (!root.requestPermission) return false;
+  try {
+    return (await root.requestPermission(opts)) === "granted";
+  } catch {
+    return false; // no user activation — the user clicks "wieder verbinden"
+  }
+}
+
 /** True when this handle can be written to at all (Chromium with the picker). */
 export function canWriteInto(root: FsDirHandle | undefined): root is FsDirHandle {
   return !!root?.getFileHandle && !!root?.getDirectoryHandle;

@@ -20,6 +20,15 @@
   const label = $derived(
     missing === 0 ? "nichts fehlt" : missing === 1 ? "Beleg fehlt" : "Belege fehlen",
   );
+  /**
+   * The ring must not congratulate you for a bad number. A nearly empty ring with
+   * 43 missing Belege in the middle read as "all good" in the brand's green, so the
+   * colour follows the state it depicts: warm while most Belege are missing, amber
+   * on the way, green only once it's nearly done.
+   */
+  const state = $derived(
+    missing === 0 ? "done" : coverage >= 0.9 ? "close" : coverage >= 0.5 ? "partial" : "poor",
+  );
   const sub = $derived(
     missing === 0
       ? `alle ${total} ${total === 1 ? "Buchung" : "Buchungen"} gedeckt`
@@ -53,12 +62,17 @@
   });
 </script>
 
-<figure class="meter" data-complete={missing === 0} aria-label={`${missing} von ${total} Buchungen ohne Beleg`}>
+<figure
+  class="meter"
+  data-complete={missing === 0}
+  data-state={state}
+  aria-label={`${missing} von ${total} Buchungen ohne Beleg`}
+>
   <svg viewBox="0 0 120 120" role="img" aria-hidden="true">
     <defs>
       <linearGradient id="meterStroke" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="var(--accent-highlight)" />
-        <stop offset="100%" stop-color="var(--accent-secondary)" />
+        <stop offset="0%" stop-color="var(--meter-from)" />
+        <stop offset="100%" stop-color="var(--meter-to)" />
       </linearGradient>
     </defs>
     <circle class="track" cx="60" cy="60" r={R} />
@@ -86,6 +100,22 @@
     height: 220px;
     margin: 0;
     flex: none;
+    /* default (and the "close" state): the brand's green */
+    --meter-from: var(--accent-highlight);
+    --meter-to: var(--accent-secondary);
+    --meter-count: var(--text-primary);
+  }
+  /* Most Belege still missing — warm, because that's what it is. */
+  .meter[data-state="poor"] {
+    --meter-from: #f0a04a;
+    --meter-to: var(--status-warn);
+    --meter-count: var(--status-warn-text);
+  }
+  /* On the way: amber, neither alarm nor congratulation. */
+  .meter[data-state="partial"] {
+    --meter-from: #f2c14e;
+    --meter-to: #e08b3c;
+    --meter-count: var(--text-primary);
   }
   svg {
     width: 100%;
@@ -124,8 +154,9 @@
     font-size: 3.4rem;
     line-height: 1;
     letter-spacing: -0.04em;
-    color: var(--text-primary);
+    color: var(--meter-count);
     font-variant-numeric: tabular-nums;
+    transition: color 0.4s ease;
   }
   .meter[data-complete="true"] .count { color: var(--text-success); }
   .label {

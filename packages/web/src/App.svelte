@@ -20,11 +20,11 @@
   import { summarize, groupEntries, type ReportEntry } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
   import { collectFromDirectory, type CollectedPdf, type FsDirHandle } from "./lib/collect";
-  import { watchFolder, ensureWritable } from "./lib/folder";
+  import { watchFolder, ensureWritable, ensureReadable } from "./lib/folder";
   import { fileIntoFolder, type FileTarget } from "./lib/filing";
   import { downloadCsv } from "./lib/csv";
   import { tooltip } from "./lib/tooltip";
-  import { saveSession, loadSession, clearSession } from "./lib/persist";
+  import { saveSession, loadSession, clearSession, saveFolders, loadFolders } from "./lib/persist";
   import { initAnalytics, track, bucket } from "@kah/analytics";
 
   const version = `${__GIT_SHA__ || "dev"} – ${__BUILD_TIME__.slice(0, 10)}`;
@@ -95,6 +95,7 @@
     const seen = new Set(sources.map((p) => p.rel));
     const merged = [...sources, ...pdfs.filter((p) => !seen.has(p.rel))];
     sources = merged;
+    void rememberFolders(pdfs); // keep the folder itself across reloads
     if (!opts.auto) track("folder_selected", { bucket: bucket(merged.length) });
     try {
       // Lazy-load the engine so pdf.js (the heavy chunk) only downloads on first use.
@@ -120,7 +121,11 @@
             ? "Kein Kontoauszug erkannt. Lege auch deinen Kontoauszug oder deine Kreditkartenabrechnung dazu."
             : "Keine lesbaren PDFs gefunden. Es werden Sparkasse-Auszüge und Rechnungs-PDFs mit Text unterstützt.";
       } else {
-        errorMsg = "Beim Lesen ist etwas schiefgelaufen. Bitte versuche es erneut.";
+        // "Etwas ist schiefgelaufen" without the reason is a dead end for everyone,
+        // including us — say what broke and leave the full error in the console.
+        console.error("[load] fehlgeschlagen:", e);
+        const detail = e instanceof Error ? e.message : String(e ?? "");
+        errorMsg = `Beim Lesen ist etwas schiefgelaufen${detail ? `: ${detail}` : ""}. Bitte versuche es erneut (Details in der Browser-Konsole).`;
       }
       return null;
     } finally {
@@ -187,11 +192,17 @@
     // names the picked folder, so any file collected from that same folder gets us
     // back to the right handle — and failing that, we file next to whatever else
     // came out of a real folder rather than not filing at all.
-    const own = sources.find((p) => p.rel === rel);
-    const sameRoot = sources.find((p) => p.root?.name === rootName);
+    const own = sources.find((p) => p.rel === rel)?.root;
+    const sameRoot = sources.find((p) => p.root?.name === rootName)?.root ?? folders.find((f) => f.name === rootName);
     const anyRoot = sources.find((p) => p.root);
-    const pick = own?.root ? { root: own.root, subdir } : sameRoot?.root ? { root: sameRoot.root, subdir } : null;
-    const target = pick ?? (anyRoot?.root ? { root: anyRoot.root, subdir: relFolder(anyRoot.rel).subdir } : null);
+    const pick = own ? { root: own, subdir } : sameRoot ? { root: sameRoot, subdir } : null;
+    const target =
+      pick ??
+      (anyRoot?.root
+        ? { root: anyRoot.root, subdir: relFolder(anyRoot.rel).subdir }
+        : folders[0]
+          ? { root: folders[0], subdir }
+          : null);
     if (!target) {
       // Worth saying out loud: this is the difference between "filed into your
       // folder" and "only in the report", and it's invisible otherwise.
@@ -269,15 +280,69 @@
     }
   }
 
+  // ---- the picked folders, across reloads -----------------------------------
+  // Handles survive in IndexedDB; access does not. So after a refresh the report
+  // is back but the folder is "locked" until one click re-grants it — much less
+  // work than walking the folder picker again, and it keeps filing, watching and
+  // renaming in place working for the rest of the session.
+  let folders = $state<FsDirHandle[]>([]);
+  /** Restored folders still waiting for that click (by name). */
+  let lockedFolders = $state<string[]>([]);
+  let reconnecting = $state(false);
+
+  async function rememberFolders(pdfs: CollectedPdf[]) {
+    const roots = [...new Set(pdfs.map((p) => p.root).filter((r): r is FsDirHandle => !!r))];
+    const add = roots.filter((r) => !folders.some((f) => f === r || f.name === r.name));
+    if (!add.length) return;
+    const next = [...folders, ...add];
+    folders = next;
+    lockedFolders = lockedFolders.filter((n) => !add.some((r) => r.name === n));
+    await saveFolders(next); // the plain array, not the reactive proxy
+  }
+
+  /** Read a (re-)connected folder and fold it into the report. Invoices the
+   *  restored session already knows get their bytes and handle back, which is what
+   *  re-enables renaming in place and opening the PDF. */
+  async function adoptFolder(handle: FsDirHandle) {
+    const pdfs = await collectFromDirectory(handle);
+    if (!pdfs.length) return;
+    if (result) {
+      const byRel = new Map(pdfs.map((p) => [p.rel, p]));
+      result = {
+        ...result,
+        invoices: result.invoices.map((i) => (byRel.has(i.row.rel) ? { ...i, pdf: byRel.get(i.row.rel) } : i)),
+      };
+    }
+    await onLoad(pdfs, { auto: true });
+  }
+
+  /** The "Ordner wieder verbinden" click: one gesture, one prompt per folder. */
+  async function reconnectFolders() {
+    if (reconnecting) return;
+    reconnecting = true;
+    try {
+      for (const handle of folders) {
+        if (!(await ensureReadable(handle))) continue;
+        lockedFolders = lockedFolders.filter((n) => n !== handle.name);
+        await adoptFolder(handle);
+      }
+    } catch (e) {
+      console.error("[folders] wieder verbinden fehlgeschlagen:", e);
+    } finally {
+      reconnecting = false;
+    }
+  }
+
   // ---- keeping the report in step with the folder ---------------------------
   // A PDF saved into the picked folder (by this app, by the browser's download, or
   // by hand) is read and matched on its own — no second drop, no "read again".
   // Only folders picked through the directory picker can be watched; dropped files
   // give no handle to watch.
 
-  const watchedRoots = $derived([
-    ...new Set(sources.map((p) => p.root).filter((r): r is FsDirHandle => !!r)),
-  ]);
+  // Every folder we hold a handle for — including ones restored from a previous
+  // session. watchFolder itself stays quiet while access isn't granted, so a
+  // still-locked folder simply waits for the reconnect click.
+  const watchedRoots = $derived(folders);
   // Identity of the watched set, so re-reading a folder doesn't rebuild watchers.
   const watchKey = $derived(watchedRoots.map((r) => r.name).join("|"));
   /** Short note in the dropzone when the watcher added something. */
@@ -355,8 +420,10 @@
     errorMsg = "";
     filter = "missing";
     sources = [];
+    folders = [];
+    lockedFolders = [];
     awaitingDemo = false;
-    clearSession();
+    clearSession(); // wipes the stored report AND the remembered folders
     // fall back to the demo; reload it if it was cleared/never loaded
     if (!demoResult) loadDemoResult().then((d) => { if (!result && !demoResult) demoResult = d; });
   }
@@ -411,6 +478,21 @@
         const d = await loadDemoResult();
         if (!result && !demoResult) demoResult = d;
       }
+    });
+    // Bring back the folders themselves. Access usually needs a click (Chrome asks
+    // again each session); where it's still granted we just pick up where we were.
+    loadFolders().then(async (saved) => {
+      if (!saved.length) return;
+      folders = saved;
+      const locked: string[] = [];
+      for (const handle of saved) {
+        const granted = handle.queryPermission
+          ? (await handle.queryPermission({ mode: "read" })) === "granted"
+          : false;
+        if (granted) await adoptFolder(handle);
+        else locked.push(handle.name);
+      }
+      lockedFolders = locked;
     });
   });
 </script>
@@ -509,7 +591,20 @@
 
   <!-- UPLOAD -->
   <section class="upload" id="upload" bind:this={uploadEl}>
-    <Dropzone onload={onLoad} onreset={reset} onremove={onRemove} {busy} {progress} {result} {errorMsg} {awaitingDemo} notice={autoNotice} />
+    <Dropzone
+      onload={onLoad}
+      onreset={reset}
+      onremove={onRemove}
+      {busy}
+      {progress}
+      {result}
+      {errorMsg}
+      {awaitingDemo}
+      notice={autoNotice}
+      locked={lockedFolders}
+      {reconnecting}
+      onreconnect={reconnectFolders}
+    />
   </section>
 
   <!-- REPORT SHELL -->

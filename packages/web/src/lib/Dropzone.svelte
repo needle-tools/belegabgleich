@@ -20,10 +20,17 @@
     awaitingDemo = false,
     onremove,
     notice = "",
+    locked = [],
+    reconnecting = false,
+    onreconnect,
   }: {
     onload: (pdfs: CollectedPdf[]) => void;
     /** Transient status from the folder watcher ("2 neue Dateien ergänzt"). */
     notice?: string;
+    /** Folders remembered from a previous session, waiting for a re-grant click. */
+    locked?: string[];
+    reconnecting?: boolean;
+    onreconnect?: () => void;
     onreset?: () => void;
     /** Drop a single loaded document (by display path) from the report. */
     onremove?: (rel: string) => void;
@@ -151,6 +158,19 @@
   aria-busy={working}
 >
   <div class="dz-inner">
+    {#if locked.length}
+      <!-- The folder outlives the reload; the access to it doesn't. One click, and
+           filing, watching and renaming in place are back. -->
+      <div class="dz-locked">
+        <span>
+          {locked.length === 1 ? `Dein Ordner „${locked[0]}“ ist gespeichert` : `${locked.length} Ordner sind gespeichert`} —
+          nach dem Neuladen fragt der Browser einmal nach dem Zugriff.
+        </span>
+        <button type="button" class="dz-btn primary" disabled={reconnecting} onclick={() => onreconnect?.()}>
+          {reconnecting ? "Verbinde …" : "Ordner wieder verbinden"}
+        </button>
+      </div>
+    {/if}
     {#if result && summary}
       <!-- SUCCESS — summary lives right here in the panel -->
       <svg class="dz-check" viewBox="0 0 52 52" aria-hidden="true">
@@ -656,6 +676,21 @@
     font-size: 0.95rem;
   }
   .dz-found strong { color: var(--status-warn-text); font-variant-numeric: tabular-nums; }
+  .dz-locked {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-card);
+    background: var(--surface-callout-info);
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+    text-align: left;
+  }
   /* The folder watcher speaking up — quiet, and it disappears again on its own. */
   .dz-notice {
     display: inline-flex;

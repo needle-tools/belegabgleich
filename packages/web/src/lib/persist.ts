@@ -9,10 +9,12 @@
  * user can wipe the stored financial PDFs whenever they want.
  */
 import type { RunResult } from "./engine";
+import type { FsDirHandle } from "./collect";
 
 const DB_NAME = "kah";
 const STORE = "session";
 const KEY = "current";
+const FOLDERS_KEY = "folders";
 
 function withStore<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -78,11 +80,42 @@ export async function loadSession(): Promise<RunResult | null> {
   }
 }
 
-/** Forget the stored session (and its PDF bytes). */
+/** Forget the stored session (and its PDF bytes), including the picked folders. */
 export async function clearSession(): Promise<void> {
   try {
     await withStore("readwrite", (s) => s.delete(KEY));
+    await withStore("readwrite", (s) => s.delete(FOLDERS_KEY));
   } catch {
     /* ignore */
+  }
+}
+
+/**
+ * The picked folders themselves. Directory handles are live objects — they are
+ * structured-cloneable (so IndexedDB keeps them across reloads) but would not
+ * survive the JSON round-trip the report goes through, hence their own key.
+ *
+ * Restoring one costs a single click to re-grant access, instead of walking the
+ * folder picker again; without it a refresh silently downgrades the tool to
+ * "report only" — no filing, no watching, no renaming in place.
+ */
+export async function saveFolders(handles: FsDirHandle[]): Promise<void> {
+  try {
+    // A plain array of the raw handles: a reactive proxy around them is not
+    // structured-cloneable, and IndexedDB would reject the whole write.
+    await withStore("readwrite", (s) => s.put(Array.from(handles), FOLDERS_KEY));
+  } catch (e) {
+    // Not fatal — the user just picks the folder again — but silence here is what
+    // made this look like it "sometimes forgets", so say it.
+    console.warn("[folders] konnten nicht gespeichert werden:", e);
+  }
+}
+
+export async function loadFolders(): Promise<FsDirHandle[]> {
+  try {
+    const saved = await withStore<FsDirHandle[] | undefined>("readonly", (s) => s.get(FOLDERS_KEY));
+    return Array.isArray(saved) ? saved.filter((h) => h && h.kind === "directory") : [];
+  } catch {
+    return [];
   }
 }
