@@ -20,7 +20,7 @@
   import { summarize, groupEntries, type ReportEntry } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
   import { collectFromDirectory, type CollectedPdf, type FsDirHandle } from "./lib/collect";
-  import { watchFolder } from "./lib/folder";
+  import { watchFolder, ensureWritable } from "./lib/folder";
   import { fileIntoFolder, type FileTarget } from "./lib/filing";
   import { downloadCsv } from "./lib/csv";
   import { tooltip } from "./lib/tooltip";
@@ -42,7 +42,15 @@
   let sources = $state<CollectedPdf[]>([]);
   // The booking whose "Beleg zuordnen" picker is open, if any.
   let pickerEntry = $state<ReportEntry | null>(null);
-  const openPicker = (e: ReportEntry) => (pickerEntry = e);
+  function openPicker(e: ReportEntry) {
+    pickerEntry = e;
+    // Ask for write access here, on the click that opens the picker: it's a real
+    // user gesture, and the moment the user has clearly decided to add a Beleg.
+    // Doing it later, when the file is dropped, risks Chrome refusing the prompt
+    // for lack of transient activation — and then nothing gets filed, silently.
+    const t = targetFor(e);
+    if (t) void ensureWritable(t.root);
+  }
 
   const live = $derived(result !== null); // true only for the user's own data
   // The report currently on screen: the user's result if loaded, else the demo,
@@ -158,17 +166,42 @@
    * (a plain drag-and-drop gives no writable handle), which keeps the old
    * memory-only behaviour.
    */
+  /** The folder part of a display rel: "Belege/10/Auszug.pdf" → ["Belege", "10"]. */
+  function relFolder(rel: string): { rootName: string; subdir: string } {
+    const parts = rel.split("/");
+    const rootName = parts.shift() ?? "";
+    parts.pop(); // the file itself
+    return { rootName, subdir: parts.join("/") };
+  }
+
   function targetFor(entry: ReportEntry | undefined): FileTarget | null {
     if (!entry || !result) return null;
     const rel = statementRelFor(entry);
-    const root = rel ? sources.find((p) => p.rel === rel)?.root : undefined;
-    if (!rel || !root) return null;
-    // rel is "<root name>/<sub>/<file>.pdf" — drop the root name and the file name.
-    const parts = rel.split("/");
-    parts.shift();
-    parts.pop();
-    const subdir = parts.join("/");
-    return { root, subdir, label: subdir ? `${root.name}/${subdir}` : root.name };
+    if (!rel) {
+      console.info("[filing] kein Auszug bekannt, zu dem dieser Beleg gehören könnte");
+      return null;
+    }
+    const { rootName, subdir } = relFolder(rel);
+    // The statement's own file is the first choice, but it need not still be in
+    // hand: a restored session keeps the bookings and drops the PDFs. The rel still
+    // names the picked folder, so any file collected from that same folder gets us
+    // back to the right handle — and failing that, we file next to whatever else
+    // came out of a real folder rather than not filing at all.
+    const own = sources.find((p) => p.rel === rel);
+    const sameRoot = sources.find((p) => p.root?.name === rootName);
+    const anyRoot = sources.find((p) => p.root);
+    const pick = own?.root ? { root: own.root, subdir } : sameRoot?.root ? { root: sameRoot.root, subdir } : null;
+    const target = pick ?? (anyRoot?.root ? { root: anyRoot.root, subdir: relFolder(anyRoot.rel).subdir } : null);
+    if (!target) {
+      // Worth saying out loud: this is the difference between "filed into your
+      // folder" and "only in the report", and it's invisible otherwise.
+      console.info(
+        `[filing] kein Ordner-Handle für „${rel}" — die Dateien kamen nicht über „Ordner wählen" (oder die Seite wurde seither neu geladen)`,
+      );
+      return null;
+    }
+    const label = target.subdir ? `${target.root.name}/${target.subdir}` : target.root.name;
+    return { ...target, label };
   }
 
   /** Folder a drop in the open picker would be saved to, for the picker's hint. */
@@ -177,6 +210,16 @@
   let filedTo = $state<string[]>([]);
   let filedExisting = $state<string[]>([]);
   let filedDenied = $state(false);
+  /** Why a Beleg wasn't filed — never leave that silent, it's the whole feature. */
+  const filingNote = $derived(
+    !live
+      ? ""
+      : filedDenied
+        ? "Nicht im Ordner gespeichert: Der Schreibzugriff wurde abgelehnt. Beim nächsten Zuordnen erlauben — dann landet der Beleg direkt im Ordner."
+        : !pickerTarget
+          ? "Nicht im Ordner gespeichert: Es gibt keinen beschreibbaren Ordner. Öffne ihn einmal über „Ordner wählen“ (nach einem Neuladen der Seite erneut) — danach werden Belege direkt dort abgelegt."
+          : "",
+  );
 
   /**
    * The "Beleg zuordnen" picker: file the dropped invoice into the folder next to
@@ -386,6 +429,7 @@
     saved={filedTo}
     existing={filedExisting}
     denied={filedDenied}
+    note={filingNote}
   />
 {/if}
 

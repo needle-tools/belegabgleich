@@ -52,8 +52,19 @@ async function targetName(pdf: CollectedPdf): Promise<string> {
  * it just stays in memory as before.
  */
 export async function fileIntoFolder(pdfs: CollectedPdf[], target: FileTarget | null): Promise<FilingResult> {
-  if (!target || !canWriteInto(target.root)) return { pdfs, saved: [], existing: [], denied: false };
-  if (!(await ensureWritable(target.root))) return { pdfs, saved: [], existing: [], denied: true };
+  if (!target) {
+    console.info("[filing] kein Zielordner — der Beleg bleibt nur im Bericht");
+    return { pdfs, saved: [], existing: [], denied: false };
+  }
+  if (!canWriteInto(target.root)) {
+    console.info(`[filing] „${target.label}" ist nicht beschreibbar (kein Verzeichnis-Handle)`);
+    return { pdfs, saved: [], existing: [], denied: false };
+  }
+  if (!(await ensureWritable(target.root))) {
+    console.info(`[filing] Schreibzugriff auf „${target.label}" nicht erteilt`);
+    return { pdfs, saved: [], existing: [], denied: true };
+  }
+  console.info(`[filing] lege ${pdfs.length} PDF in „${target.label}" ab`);
 
   const out: CollectedPdf[] = [];
   const saved: string[] = [];
@@ -71,8 +82,10 @@ export async function fileIntoFolder(pdfs: CollectedPdf[], target: FileTarget | 
       // and nothing when the handle has none).
       const rel = target.root.name ? `${target.root.name}/${path}` : path;
       (duplicate ? existing : saved).push(path);
+      console.info(`[filing] ${duplicate ? "lag schon da" : "gespeichert"}: ${rel}`);
       out.push({ src: { kind: "file", path: rel }, rel, data: pdf.data, handle, root: target.root });
-    } catch {
+    } catch (e) {
+      console.warn(`[filing] „${pdf.rel}" konnte nicht gespeichert werden:`, e);
       out.push(pdf); // writing failed for this one — keep matching it from memory
     }
   }

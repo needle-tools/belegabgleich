@@ -21,6 +21,7 @@
     saved = [],
     existing = [],
     denied = false,
+    note = "",
   }: {
     entry: ReportEntry;
     onload: (pdfs: CollectedPdf[], entry: ReportEntry) => Promise<RunResult | null> | void;
@@ -37,6 +38,8 @@
     existing?: string[];
     /** Write access was refused — the Beleg was matched but not saved. */
     denied?: boolean;
+    /** Why nothing could be filed into the folder (empty when it worked). */
+    note?: string;
   } = $props();
 
   const url = $derived(invoiceUrlFor(entry.provider));
@@ -166,6 +169,10 @@
       {/if}
     </div>
 
+    {#if note}
+      <p class="filing-note" role="status">{note}</p>
+    {/if}
+
     {#if feedback}
       <div class="fb" class:ok={feedback.kind === "matched"} class:warn={feedback.kind === "nomatch" || feedback.kind === "empty"} class:err={feedback.kind === "error"} role="status">
         {#if feedback.kind === "matched"}
@@ -179,7 +186,6 @@
             {:else if feedback.invoice}
               <span class="fb-sub">{feedback.invoice}</span>
             {/if}
-            {#if denied}<span class="fb-sub">Ohne Schreibzugriff nur im Bericht — die Datei bleibt im Download-Ordner.</span>{/if}
           </div>
         {:else if feedback.kind === "nomatch"}
           <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4v5M8 11.5v.5" /></svg>
@@ -333,6 +339,16 @@
   .dropzone p { margin: 2px 0; font-size: 0.9rem; color: var(--text-primary); }
   .dropzone p.muted { color: var(--text-muted); font-size: 0.8rem; }
   .dz-target { color: var(--text-secondary); font-weight: 700; overflow-wrap: anywhere; }
+  .filing-note {
+    margin: 10px 0 0;
+    padding: 9px 11px;
+    border-radius: var(--radius-card);
+    background: var(--surface-callout-info);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
   .dropzone.busy { cursor: default; border-style: solid; border-color: var(--border-subtle); }
 
   .spinner {

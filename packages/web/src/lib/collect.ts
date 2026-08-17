@@ -76,7 +76,7 @@ function fromZip(zipName: string, zipRel: string, bytes: Uint8Array): CollectedP
 async function fromFile(
   file: File,
   rel: string,
-  fs?: { handle: FsFileHandle; root: FsDirHandle },
+  fs?: { handle: FsFileHandle; root?: FsDirHandle },
 ): Promise<CollectedPdf[]> {
   const buf = await file.arrayBuffer();
   if (isZip(file.name)) return fromZip(file.name, rel, new Uint8Array(buf));
@@ -195,18 +195,43 @@ async function walkEntry(entry: FsEntry, out: CollectedPdf[], onFound?: OnFound)
   }
 }
 
-/** Collect PDFs from a drop, descending into any dropped folders. */
-export async function collectFromDataTransfer(dt: DataTransfer, onFound?: OnFound): Promise<CollectedPdf[]> {
-  const items = Array.from(dt.items).filter((it) => it.kind === "file");
-  const entries = items
-    .map((it) => (it as DataTransferItem & { webkitGetAsEntry?: () => FsEntry | null }).webkitGetAsEntry?.())
-    .filter((e): e is FsEntry => !!e);
+type DroppedItem = DataTransferItem & {
+  /** Chromium: the same handle the directory picker returns — writable/watchable. */
+  getAsFileSystemHandle?: () => Promise<FsFileHandle | FsDirHandle | null>;
+  webkitGetAsEntry?: () => FsEntry | null;
+};
 
-  if (entries.length) {
-    const out: CollectedPdf[] = [];
-    for (const entry of entries) await walkEntry(entry, out, onFound);
-    return out;
+/**
+ * Collect PDFs from a drop, descending into any dropped folders.
+ *
+ * A dragged folder is worth more than its bytes: where the browser offers a real
+ * directory handle, we keep it, so a dropped folder can be renamed in place,
+ * written into and watched exactly like a picked one. Both accessors have to be
+ * called before the first await — the DataTransfer's items are gone after that.
+ */
+export async function collectFromDataTransfer(dt: DataTransfer, onFound?: OnFound): Promise<CollectedPdf[]> {
+  const items = Array.from(dt.items).filter((it) => it.kind === "file") as DroppedItem[];
+  const handles = items.map((it) => it.getAsFileSystemHandle?.() ?? Promise.resolve(null));
+  const entries = items.map((it) => it.webkitGetAsEntry?.() ?? null);
+
+  const resolved = await Promise.all(handles.map((p) => p.catch(() => null)));
+  const out: CollectedPdf[] = [];
+  let handled = false;
+  for (let i = 0; i < items.length; i++) {
+    const handle = resolved[i];
+    if (handle?.kind === "directory") {
+      handled = true;
+      await walkHandle(handle, handle.name, out, handle, onFound);
+    } else if (handle?.kind === "file") {
+      handled = true;
+      out.push(...(await fromFile(await handle.getFile(), handle.name, { handle })));
+      onFound?.(out.length);
+    } else if (entries[i]) {
+      handled = true;
+      await walkEntry(entries[i]!, out, onFound);
+    }
   }
-  // No entry API (rare) — fall back to the flat file list.
+  if (handled) return out;
+  // Neither API available (rare) — fall back to the flat file list.
   return collectFromFileList(dt.files, onFound);
 }
