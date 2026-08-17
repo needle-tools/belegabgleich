@@ -4,7 +4,7 @@
  * provider→invoice-URL lookup (from the repo-root providers.json). Building a
  * report from the matching engine lives in {@link buildReport}.
  */
-import { canon, configureAliases, groupRelated, type MatchResult, type ChargeGroup } from "@kah/core";
+import { canon, configureAliases, groupRelated, type Charge, type MatchResult, type ChargeGroup } from "@kah/core";
 import { expectsNoInvoiceAny } from "@kah/parsers";
 import providersDoc from "../../../../providers.json";
 
@@ -53,6 +53,9 @@ export type ReportEntry = {
   note?: string;
   /** raw statement descriptor (carries the account id used for grouping) */
   merchant?: string;
+  /** Position of the charge in the statement, so the report can be put back into
+   *  the order the document prints it — absent on demo rows and older sessions. */
+  order?: number;
 };
 
 /** A group of related report rows (recurring same-account or one-invoice). */
@@ -103,8 +106,12 @@ function noInvoiceNote(merchant: string): string {
  * "kein Beleg nötig" so they stay out of the Fehlend list. Unmatched invoices
  * are informational and not surfaced as rows.
  */
-export function buildReport(match: MatchResult): ReportEntry[] {
+export function buildReport(match: MatchResult, ordered?: readonly Charge[]): ReportEntry[] {
   const entries: ReportEntry[] = [];
+  // Where each charge stands in the statement. The report groups matched before
+  // missing, which loses that order — keeping the index lets the UI put it back.
+  const position = new Map<Charge, number>();
+  (ordered ?? []).forEach((c, i) => position.set(c, i));
 
   for (const { charge, rows } of match.matched) {
     entries.push({
@@ -115,6 +122,7 @@ export function buildReport(match: MatchResult): ReportEntry[] {
       status: "matched",
       invoice: rows.map((r) => r.rel).join(", "),
       merchant: charge.merchant,
+      ...(position.has(charge) ? { order: position.get(charge) } : {}),
     });
   }
 
@@ -128,6 +136,7 @@ export function buildReport(match: MatchResult): ReportEntry[] {
       status: noInvoice ? "no_invoice" : "missing",
       ...(noInvoice ? { note: noInvoiceNote(charge.merchant) } : {}),
       merchant: charge.merchant,
+      ...(position.has(charge) ? { order: position.get(charge) } : {}),
     });
   }
 

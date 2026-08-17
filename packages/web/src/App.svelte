@@ -69,12 +69,36 @@
   type Filter = "missing" | "all" | "matched";
   let filter = $state<Filter>("missing");
 
+  // How the rows are ordered. A–Z first: looking for one vendor's Beleg is the
+  // common move, and an alphabetical list is the one you can scan without reading.
+  type Sort = "abc" | "date" | "doc";
+  let sort = $state<Sort>("abc");
+  const SORTS: { id: Sort; label: string; hint: string }[] = [
+    { id: "abc", label: "A–Z", hint: "Nach Anbieter alphabetisch" },
+    { id: "date", label: "Datum", hint: "Neueste Buchung zuerst" },
+    { id: "doc", label: "Dokument", hint: "In der Reihenfolge, in der die Buchungen im Auszug stehen" },
+  ];
+  const byName = (a: ReportEntry, b: ReportEntry) =>
+    a.provider.localeCompare(b.provider, "de", { sensitivity: "base" });
+  const byDate = (a: ReportEntry, b: ReportEntry) => b.date.localeCompare(a.date);
+  // Rows from a session stored before the position was kept have no `order`; they
+  // keep their relative order at the end rather than jumping around.
+  const byDoc = (a: ReportEntry, b: ReportEntry) =>
+    (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER);
+  const comparator = $derived(
+    sort === "abc"
+      ? (a: ReportEntry, b: ReportEntry) => byName(a, b) || byDate(a, b)
+      : sort === "date"
+        ? (a: ReportEntry, b: ReportEntry) => byDate(a, b) || byName(a, b)
+        : (a: ReportEntry, b: ReportEntry) => byDoc(a, b) || byDate(a, b),
+  );
+
   const visible = $derived(
     entries
       .filter((e) =>
         filter === "all" ? true : filter === "missing" ? e.status === "missing" : e.status === "matched",
       )
-      .sort((a, b) => b.date.localeCompare(a.date)),
+      .sort(comparator),
   );
 
   // Collapse recurring same-account / one-invoice rows into expandable groups.
@@ -640,6 +664,22 @@
         <strong class="num">{summary.noInvoice}</strong><span class="status-strip-label">kein Beleg nötig</span>
       </div>
       <div class="strip-spacer"></div>
+      <div class="sort-control" role="group" aria-label="Sortierung">
+        <span class="sort-label">Sortieren</span>
+        <div class="segmented-control">
+          {#each SORTS as s (s.id)}
+            <button
+              type="button"
+              aria-pressed={sort === s.id}
+              class:is-on={sort === s.id}
+              onclick={() => (sort = s.id)}
+              use:tooltip={s.hint}
+            >
+              {s.label}
+            </button>
+          {/each}
+        </div>
+      </div>
       <button
         class="btn-export"
         type="button"
@@ -652,7 +692,7 @@
       </button>
     </div>
 
-    {#key filter}
+    {#key `${filter}:${sort}`}
       <ul class="rows">
         {#each groups as group, i (group.key)}
           {#if group.items.length === 1}
@@ -823,7 +863,33 @@
     opacity: 0.6;
   }
 
-  .status-strip { margin-bottom: 16px; }
+  .status-strip { margin-bottom: 16px; flex-wrap: wrap; }
+  /* Sort switch: same segmented control as the filter, so the two read as one
+     row of controls rather than two kinds of thing. */
+  .sort-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sort-label {
+    font-size: var(--type-micro-label-size);
+    font-weight: var(--type-micro-label-weight);
+    letter-spacing: var(--type-micro-label-tracking);
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .sort-control .segmented-control > button {
+    font-family: var(--font-family-body);
+  }
+  /* The shared stylesheet paints aria-selected; these are toggle buttons. */
+  .sort-control .segmented-control > button.is-on {
+    background: var(--control-segmented-segment-background-selected);
+    box-shadow: inset 0 0 0 1px var(--control-segmented-segment-border-color-selected);
+    color: var(--text-primary);
+  }
+  @media (max-width: 720px) {
+    .sort-label { display: none; }
+  }
   .num {
     font-family: var(--font-family-display);
     font-weight: 800;

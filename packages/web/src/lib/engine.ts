@@ -169,7 +169,7 @@ function assemble(
   });
 
   return {
-    entries: buildReport(match),
+    entries: buildReport(match, deduped),
     statements: [...new Set(statements)],
     statementFiles: [...new Set(statementFiles)],
     statementSources,
