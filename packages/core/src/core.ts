@@ -473,6 +473,42 @@ export function dedupeNames(proposed: string[]): string[] {
   });
 }
 
+/**
+ * Identity of an invoice DOCUMENT, as opposed to of the file holding it: issuer,
+ * date, total and — when the document printed one — its invoice number. Empty when
+ * too little was extracted to make a claim, so guesses never count as duplicates.
+ */
+export function documentKey(f: Pick<Fields, "provider" | "date" | "total" | "invoice_number">): string {
+  const provider = canon(f.provider);
+  const total = parseFloat(f.total);
+  if (!provider || provider === "Unknown" || !isFinite(total)) return "";
+  const num = slug(f.invoice_number).toLowerCase();
+  if (!num && !ISO.test(f.date)) return "";
+  return `${provider}|${total.toFixed(2)}|${num || f.date}`;
+}
+
+/**
+ * The same invoice filed more than once — the classic being one PDF dropped into
+ * both 03 and 04 because you weren't sure which month it belonged to. Returns one
+ * group per document, each holding the rows that are copies of each other; a
+ * document present exactly once never appears.
+ */
+export function findDuplicates<T extends Pick<Row, "rel" | "provider" | "date" | "total" | "invoice_number">>(
+  rows: readonly T[],
+): T[][] {
+  const byKey = new Map<string, T[]>();
+  for (const r of rows) {
+    const key = documentKey(r);
+    if (!key) continue;
+    const group = byKey.get(key);
+    if (group) {
+      // The same file read twice (a folder re-scan) is not a duplicate document.
+      if (!group.some((g) => g.rel === r.rel)) group.push(r);
+    } else byKey.set(key, [r]);
+  }
+  return [...byKey.values()].filter((g) => g.length > 1);
+}
+
 export type MissingEntry = {
   provider: string;
   first: string;
@@ -780,11 +816,19 @@ export interface ChargeGroup<T extends Groupable> {
 }
 
 /**
- * Collapse items that clearly belong together so recurring split payments read as
- * one line: matched charges paid by the SAME invoice PDF(s), or still-missing
- * charges that share a provider + embedded account id (e.g. several Google Ads
- * debits across different months under the same customer number). Everything else
- * stays a group of one. Statement order is preserved (first occurrence wins).
+ * Collapse items that clearly belong together so recurring payments read as one
+ * line: matched charges paid by the SAME invoice PDF(s), and still-missing charges
+ * from the same vendor.
+ *
+ * The rule for missing charges used to require an account id embedded in the
+ * statement text (a run of ≥8 digits), which made grouping look arbitrary from the
+ * outside — "EVH" collapsed because its descriptor carries a customer number, while
+ * five months of GitHub stayed five rows. Now every vendor groups; the id only
+ * SPLITS a vendor whose charges name different accounts, which is the case where
+ * merging really would be wrong (two Google Ads customers billed to one card).
+ *
+ * Everything else stays a group of one. Statement order is preserved (first
+ * occurrence wins).
  */
 export function groupRelated<T extends Groupable>(items: T[]): ChargeGroup<T>[] {
   const groups: ChargeGroup<T>[] = [];
@@ -793,8 +837,10 @@ export function groupRelated<T extends Groupable>(items: T[]): ChargeGroup<T>[] 
     let key = "";
     if (item.status === "matched" && item.invoice) key = `inv:${item.invoice}`;
     else if (item.status === "missing") {
-      const id = merchantId(item.merchant);
-      if (id) key = `id:${canon(item.merchant)}:${id}`;
+      const provider = canon(item.merchant);
+      // An unidentified vendor is not a vendor: "Unknown" would sweep every
+      // unrecognized descriptor into one meaningless pile.
+      if (provider && provider !== "Unknown") key = `open:${provider}:${merchantId(item.merchant)}`;
     }
     const existing = key ? byKey.get(key) : undefined;
     if (existing) {

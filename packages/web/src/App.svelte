@@ -17,13 +17,14 @@
   import PickerModal from "./lib/PickerModal.svelte";
   import RenamePanel from "./lib/RenamePanel.svelte";
   import ExtrasPanel from "./lib/ExtrasPanel.svelte";
+  import DuplicatesNote from "./lib/DuplicatesNote.svelte";
   import { openPdfBytes } from "./lib/openBeleg";
   import { MOCK_ENTRIES, MOCK_PERIOD, MOCK_STATEMENT, DEMO_SOURCE_PATHS } from "./lib/mock";
-  import { summarize, groupEntries, byAmountDesc, money, statementLabels, type ReportEntry } from "./lib/report";
+  import { summarize, groupEntries, byAmountDesc, money, statementLabels, type EntryGroup, type ReportEntry } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
   import { collectFromDirectory, type CollectedPdf, type FsDirHandle } from "./lib/collect";
   import { watchFolder, ensureWritable, ensureReadable, deleteFromFolder } from "./lib/folder";
-  import { fileIntoFolder, type FileTarget } from "./lib/filing";
+  import { fileIntoFolder, type FileTarget, type NameHint } from "./lib/filing";
   import { downloadCsv } from "./lib/csv";
   import { tooltip } from "./lib/tooltip";
   import { saveSession, loadSession, clearSession, saveFolders, loadFolders } from "./lib/persist";
@@ -42,11 +43,13 @@
   let progress = $state<RunProgress | null>(null);
   // All sources collected so far — multiple folders/files accumulate (deduped by rel).
   let sources = $state<CollectedPdf[]>([]);
-  // The booking whose "Beleg zuordnen" picker is open, if any.
-  let pickerEntry = $state<ReportEntry | null>(null);
-  function openPicker(e: ReportEntry) {
-    pickerEntry = e;
-  }
+  /** The bookings the "Beleg zuordnen" dialog is open for: one row, or a whole
+   *  vendor group — you fetch a vendor's invoices in one trip, so you should be able
+   *  to hand them over in one drop. */
+  let pickerEntries = $state<ReportEntry[] | null>(null);
+  const pickerEntry = $derived(pickerEntries?.find((e) => e.status === "missing") ?? pickerEntries?.[0] ?? null);
+  const openPicker = (e: ReportEntry) => (pickerEntries = [e]);
+  const openGroupPicker = (g: EntryGroup) => (pickerEntries = [...g.items]);
 
   /**
    * Ask for write access, at the gesture that hands us a file — the drop itself, or
@@ -249,11 +252,13 @@
 
   function targetFor(entry: ReportEntry | undefined): FileTarget | null {
     if (!entry || !result) return null;
-    const rel = statementRelFor(entry);
-    if (!rel) {
-      console.info("[filing] kein Auszug bekannt, zu dem dieser Beleg gehören könnte");
-      return null;
-    }
+    return targetForStatement(entry.source?.rel ?? statementRelFor(entry));
+  }
+
+  /** The same, for a statement's display path directly — which is what a matched
+   *  Beleg gives us: the folder of the document carrying the booking it settles. */
+  function targetForStatement(rel: string | undefined): FileTarget | null {
+    if (!rel || !result) return null;
     const { rootName, subdir } = relFolder(rel);
     // The statement's own file is the first choice, but it need not still be in
     // hand: a restored session keeps the bookings and drops the PDFs. The rel still
@@ -290,8 +295,9 @@
   let filedExisting = $state<string[]>([]);
   let filedDenied = $state(false);
   /** What the last drop wrote, so it can be taken back out again. Only ever the
-   *  files THIS drop created — never one that was already in the folder. */
-  let undoable = $state<{ root: FsDirHandle; files: { path: string; rel: string }[] } | null>(null);
+   *  files THIS drop created — never one that was already in the folder. Each write
+   *  carries its own root: one drop can now land in several month folders. */
+  let undoable = $state<{ files: { path: string; rel: string; root: FsDirHandle }[] } | null>(null);
   /** Why a Beleg wasn't filed — never leave that silent, it's the whole feature. */
   const filingNote = $derived(
     !live
@@ -304,10 +310,15 @@
   );
 
   /**
-   * The "Beleg zuordnen" picker: file the dropped invoice into the folder next to
-   * its statement (canonical name, nothing overwritten), then match it against the
-   * report that's currently on screen — the user's result, or the demo (seeded on
-   * demand). Returns the updated result so the picker can report the outcome.
+   * The "Beleg zuordnen" picker: read the dropped Belege, file each one into the
+   * folder of the booking IT settles, then match again so the report points at the
+   * files on disk. Works for one Beleg and for a handful dropped at once (five
+   * months of Hetzner invoices, two Amazon invoices for one charge).
+   *
+   * Order matters: matching has to happen before writing, because where a Beleg
+   * belongs is only knowable from the booking it matches — but the report must end
+   * up pointing at the file's final path, not at the copy in Downloads. So the PDFs
+   * are read once, matched, filed, and matched again from the same parse.
    */
   async function onAssign(pdfs: CollectedPdf[], entry?: ReportEntry): Promise<RunResult | null> {
     busy = true;
@@ -317,41 +328,84 @@
     filedDenied = false;
     undoable = null;
     try {
-      // Only ever write for the user's own report — the demo has no folder.
-      const target = result ? targetFor(entry) : null;
-      const filed = await fileIntoFolder(pdfs, target);
-      if (target && filed.written.length) undoable = { root: target.root, files: filed.written };
+      const { parseInputs, addParsed, repointInvoice } = await import("./lib/engine");
+      const parsed = await parseInputs(pdfs, (p) => (progress = p));
+
+      // The demo has no folder to write into — match and be done.
+      if (!result) {
+        let base = demoResult;
+        if (!base) base = demoResult = await loadDemoResult();
+        if (!base) {
+          errorMsg = "Die Demo konnte nicht geladen werden. Bitte lade die Seite neu.";
+          return null;
+        }
+        demoResult = addParsed(base, parsed);
+        return demoResult;
+      }
+
+      // Where does each new Beleg belong? Match once to find out, without keeping
+      // the outcome: these rows still carry their Downloads-folder paths.
+      const tentative = addParsed(result, parsed);
+      const statementByInvoice = new Map<string, string>();
+      for (const e of tentative.entries) {
+        if (e.status !== "matched" || !e.invoice || !e.source) continue;
+        for (const rel of e.invoice.split(", ")) statementByInvoice.set(rel, e.source.rel);
+      }
+      // A Beleg that matched nothing goes where the booking you dropped it on lives.
+      const fallback = targetFor(entry) ?? targetForStatement(statementRelFor(entry ?? tentative.entries[0]));
+
+      const plans = parsed.invoices.map((item) => ({
+        pdf: item.pdf!,
+        target: targetForStatement(statementByInvoice.get(item.row.rel)) ?? fallback,
+        hint: hintFor(item.row.rel, tentative, entry),
+      }));
+      // Statements and unreadable PDFs dropped in here are not filed anywhere; they
+      // keep their own path and simply join the report.
+      const unfiled = pdfs.filter((p) => !plans.some((pl) => pl.pdf.rel === p.rel));
+
+      const filed = await fileIntoFolder(plans);
+      if (filed.written.length) undoable = { files: filed.written };
       filedTo = filed.saved;
       filedExisting = filed.existing;
       filedDenied = filed.denied;
-      pdfs = filed.pdfs;
+
+      // Same parse, new locations — nothing is read a second time.
+      const byOldRel = new Map(plans.map((pl, i) => [pl.pdf.rel, filed.pdfs[i]]));
+      const relocated = {
+        ...parsed,
+        invoices: parsed.invoices.map((item) => {
+          const now = byOldRel.get(item.row.rel);
+          return now && now.rel !== item.row.rel ? repointInvoice(item, now) : item;
+        }),
+      };
+
       // Filed documents are part of the folder now; remember them so the watcher
       // doesn't read them back in as a second copy.
-      if (filed.saved.length || filed.existing.length) {
-        const known = new Set(sources.map((p) => p.rel));
-        sources = [...sources, ...pdfs.filter((p) => !known.has(p.rel))];
-      }
-      const { addInvoices } = await import("./lib/engine");
-      if (result) {
-        result = await addInvoices(result, pdfs);
-        saveSession(result);
-        return result;
-      }
-      let base = demoResult;
-      if (!base) base = demoResult = await loadDemoResult();
-      if (!base) {
-        errorMsg = "Die Demo konnte nicht geladen werden. Bitte lade die Seite neu.";
-        return null;
-      }
-      demoResult = await addInvoices(base, pdfs);
-      return demoResult;
-    } catch {
-      errorMsg = "Beim Prüfen ist etwas schiefgelaufen. Bitte versuche es erneut.";
+      const known = new Set(sources.map((p) => p.rel));
+      sources = [...sources, ...[...filed.pdfs, ...unfiled].filter((p) => !known.has(p.rel))];
+
+      result = addParsed(result, relocated);
+      saveSession(result);
+      return result;
+    } catch (e) {
+      console.error("[assign] fehlgeschlagen:", e);
+      const detail = e instanceof Error ? e.message : String(e ?? "");
+      errorMsg = `Beim Prüfen ist etwas schiefgelaufen${detail ? `: ${detail}` : ""}. Bitte versuche es erneut.`;
       return null;
     } finally {
       busy = false;
       progress = null;
     }
+  }
+
+  /** Booking data for naming a Beleg whose own PDF names no issuer: the charge it
+   *  matched, or failing that the one it was dropped on. */
+  function hintFor(rel: string, tentative: RunResult, entry?: ReportEntry): NameHint | undefined {
+    const hit = tentative.entries.find(
+      (e) => e.status === "matched" && (e.invoice ?? "").split(", ").includes(rel),
+    );
+    const from = hit ?? entry;
+    return from ? { provider: from.provider, date: from.date, amount: from.amount, currency: from.currency } : undefined;
   }
 
   /**
@@ -366,10 +420,10 @@
    */
   async function onUndoFiling(): Promise<boolean> {
     if (!undoable) return false;
-    const { root, files } = undoable;
+    const { files } = undoable;
     busy = true;
     try {
-      for (const f of files) await deleteFromFolder(root, f.path);
+      for (const f of files) await deleteFromFolder(f.root, f.path);
       const gone = new Set(files.map((f) => f.rel));
       sources = sources.filter((p) => !gone.has(p.rel));
       if (result) {
@@ -624,17 +678,17 @@
   });
 </script>
 
-<svelte:window onkeydown={(e) => { if (e.key === "Escape") { menuOpen = false; pickerEntry = null; } }} />
+<svelte:window onkeydown={(e) => { if (e.key === "Escape") { menuOpen = false; pickerEntries = null; } }} />
 
-<DropOverlay onload={onLoad} disabled={busy || pickerEntry !== null} />
+<DropOverlay onload={onLoad} disabled={busy || pickerEntries !== null} />
 
-{#if pickerEntry}
+{#if pickerEntries}
   <PickerModal
-    entry={pickerEntry}
+    entries={pickerEntries}
     loadError={errorMsg}
     onload={onAssign}
     onprepare={() => prepareFiling()}
-    onclose={() => (pickerEntry = null)}
+    onclose={() => (pickerEntries = null)}
     targetLabel={pickerTarget?.label ?? ""}
     saved={filedTo}
     existing={filedExisting}
@@ -802,7 +856,7 @@
           {#if group.items.length === 1}
             <ReportRow entry={group.items[0]} index={i} {showSource} {sourceNames} onpick={openPicker} />
           {:else}
-            <GroupRow {group} index={i} {showSource} {sourceNames} onpick={openPicker} />
+            <GroupRow {group} index={i} {showSource} {sourceNames} onpick={openPicker} onpickgroup={openGroupPicker} />
           {/if}
         {/each}
       </ul>
@@ -810,6 +864,10 @@
 
     {#if visible.length === 0}
       <p class="empty">Nichts in dieser Ansicht.</p>
+    {/if}
+
+    {#if live && result?.duplicates?.length}
+      <DuplicatesNote duplicates={result.duplicates} />
     {/if}
 
     {#if !live}

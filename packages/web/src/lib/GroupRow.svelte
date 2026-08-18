@@ -1,7 +1,6 @@
 <script lang="ts">
   import ReportRow from "./ReportRow.svelte";
   import { tooltip } from "./tooltip";
-  import { openBeleg } from "./openBeleg";
   import { money, invoiceUrlFor, sourceShort, type EntryGroup, type ReportEntry } from "./report";
 
   let {
@@ -10,6 +9,7 @@
     showSource = false,
     sourceNames,
     onpick,
+    onpickgroup,
   }: {
     group: EntryGroup;
     index?: number;
@@ -20,6 +20,8 @@
     /** Opens the assign picker for ONE booking. Must reach the expanded child
      *  rows — they carry their own "Beleg holen", and without it it does nothing. */
     onpick?: (e: ReportEntry) => void;
+    /** Opens the assign dialog for the whole group: one vendor trip, all invoices. */
+    onpickgroup?: (g: EntryGroup) => void;
   } = $props();
 
   let open = $state(false);
@@ -30,6 +32,17 @@
   // that's the one you're most likely here to fetch.
   const newest = $derived(group.items.reduce((a, b) => (b.date > a.date ? b : a), group.items[0]).date);
   const url = $derived(group.status !== "matched" ? invoiceUrlFor(provider, newest) : undefined);
+  const oldest = $derived(group.items.reduce((a, b) => (b.date < a.date ? b : a), group.items[0]).date);
+  /** "Mai 25 – Sep 25", or the plain date when they all fall in one month. */
+  const monthFmt = new Intl.DateTimeFormat("de-DE", { month: "short", year: "2-digit" });
+  const asMonth = (iso: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso || "—";
+    const [y, m] = iso.split("-").map(Number);
+    return monthFmt.format(new Date(y, m - 1, 1));
+  };
+  const span = $derived(
+    asMonth(oldest) === asMonth(newest) ? asMonth(newest) : `${asMonth(oldest)} – ${asMonth(newest)}`,
+  );
   /** The documents this group's bookings came from — one name, or how many. */
   const sources = $derived([...new Set(group.items.map((i) => i.source?.rel).filter((v): v is string => !!v))]);
   const statusLabel = $derived(
@@ -76,8 +89,18 @@
     </span>
   {/if}
 
-  <span class="c-date" use:tooltip={"Mehrere Buchungen desselben Kontos — zusammengefasst"}>
-    {group.items.length} Buchungen
+  <!-- Says WHY these rows are one row, and over which months — the grouping rule was
+       invisible before, which made it look arbitrary. -->
+  <span
+    class="c-date"
+    use:tooltip={group.status === "matched"
+      ? `${group.items.length} Buchungen, die derselbe Beleg abdeckt — zusammengefasst. Aufklappen zeigt sie einzeln.`
+      : `Alle offenen Buchungen von ${provider} — zusammengefasst. Aufklappen zeigt sie einzeln.`}
+  >
+    <span class="count-lines">
+      <span>{group.items.length} Buchungen</span>
+      <span class="span">{span}</span>
+    </span>
   </span>
 
   <span class="c-amount">{money(group.sum, group.currency)}</span>
@@ -88,34 +111,20 @@
 
   <div class="c-action">
     {#if group.status !== "matched"}
-      {#if url}
-        <!-- One trip to the vendor covers every booking in the group, so this
-             deliberately skips the per-booking picker. -->
-        <a
-          class="action"
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          onclick={(e) => { e.preventDefault(); openBeleg(url!); }}
-          use:tooltip={`Rechnungen bei ${provider} herunterladen (öffnet die Belegseite in einem neuen Tab)`}
-        >
-          Beleg holen
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
-        </a>
-      {:else if !open}
-        <!-- Without a vendor link the row used to offer nothing at all, leaving the
-             chevron as the only (undiscoverable) way in. Each booking has its own
-             picker — so send the user there. -->
-        <button
-          type="button"
-          class="action"
-          onclick={toggle}
-          use:tooltip={"Einzelne Buchungen anzeigen und den Beleg je Buchung zuordnen"}
-        >
-          Einzeln zuordnen
-          <svg class="chev-action" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4" /></svg>
-        </button>
-      {/if}
+      <!-- One trip to the vendor covers every booking in the group, and one dialog
+           takes all of the invoices you come back with — including the vendor link
+           itself, so there's no reason to leave the group to fetch them. -->
+      <button
+        type="button"
+        class="action"
+        onclick={() => onpickgroup?.(group)}
+        use:tooltip={url
+          ? `Rechnungen bei ${provider} holen und alle auf einmal diesen ${group.items.length} Buchungen zuordnen`
+          : `Rechnungen für diese ${group.items.length} Buchungen auf einmal zuordnen`}
+      >
+        Belege holen
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
+      </button>
     {/if}
   </div>
 </li>
@@ -182,6 +191,8 @@
     text-overflow: ellipsis;
   }
   .c-date { color: var(--text-muted); font-size: 0.85rem; white-space: nowrap; }
+  .count-lines { display: flex; flex-direction: column; gap: 1px; }
+  .span { font-size: 0.74rem; opacity: 0.85; font-variant-numeric: tabular-nums; }
   .c-source { min-width: 0; }
   .source-name {
     display: block;

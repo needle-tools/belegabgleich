@@ -1,10 +1,15 @@
 <script lang="ts">
   /**
-   * Per-charge "Beleg zuordnen" overlay: shows the booking, lets the user open the
-   * vendor's billing page in a new tab to download the invoice, then drop it right
-   * here. The dropped PDF is added to the source pool
-   * and the whole abgleich re-runs — matchStatement links it to this booking by
-   * amount, so the row flips to "Beleg da". Everything stays local.
+   * "Beleg zuordnen" overlay: shows the booking (or the whole vendor group), lets the
+   * user open the vendor's billing page in a new tab to download the invoices, then
+   * drop them right here. The dropped PDFs are filed and the abgleich re-runs —
+   * matchStatement links each one by amount, so the rows flip to "Beleg da".
+   * Everything stays local.
+   *
+   * A group is the real unit of work: you go to Hetzner once and come back with five
+   * months of invoices. Dropping them one booking at a time meant opening five
+   * dialogs, so the dialog takes a list — and answers per booking, because "3 von 5"
+   * is the only way to know which month you forgot.
    */
   import { collectFromDataTransfer, collectFromFileList, type CollectedPdf } from "./collect";
   import { openBeleg } from "./openBeleg";
@@ -12,7 +17,7 @@
   import type { RunResult } from "./engine";
 
   let {
-    entry,
+    entries,
     onload,
     onclose,
     onprepare,
@@ -25,7 +30,8 @@
     note = "",
     onundo,
   }: {
-    entry: ReportEntry;
+    /** The bookings this dialog is about: one row, or a whole vendor group. */
+    entries: ReportEntry[];
     onload: (pdfs: CollectedPdf[], entry: ReportEntry) => Promise<RunResult | null> | void;
     onclose: () => void;
     /** Called on the gesture that supplies a file (drop, or opening the file
@@ -51,7 +57,15 @@
     onundo?: () => Promise<boolean>;
   } = $props();
 
-  const portals = $derived(invoicePortalsFor(entry.provider, entry.date));
+  /** The booking that stands for the set: oldest still-open one, else the first.
+   *  It supplies the vendor, and the folder a Beleg falls back to. */
+  const lead = $derived(entries.find((e) => e.status === "missing") ?? entries[0]);
+  const open = $derived(entries.filter((e) => e.status === "missing"));
+  const group = $derived(entries.length > 1);
+  // Newest booking in the set: for a vendor page that filters by date, that's the
+  // one you're most likely here to fetch.
+  const newest = $derived(entries.reduce((a, b) => (b.date > a.date ? b : a), entries[0]).date);
+  const portals = $derived(invoicePortalsFor(lead.provider, newest));
   // Vendors that bill through several portals get one button each; with a single
   // portal the header keeps its plain "Quelle öffnen" shortcut.
   const url = $derived(portals.length === 1 ? portals[0].url : undefined);
@@ -60,6 +74,10 @@
   let depth = 0;
   let busy = $state(false);
   let feedback = $state<null | { kind: "matched" | "nomatch" | "empty" | "error"; invoice?: string }>(null);
+  /** Per-booking outcome of the last drop, keyed like the list is rendered. Empty
+   *  until something has been dropped. */
+  let covered = $state<Map<string, string | null>>(new Map());
+  const keyOf = (e: ReportEntry, i: number) => `${e.date}|${e.amount}|${i}`;
   let fileInput: HTMLInputElement;
   /** null = nothing taken back yet; "done"/"failed" = outcome of the last try. */
   let undone = $state<null | "done" | "failed">(null);
@@ -92,15 +110,22 @@
     busy = true;
     feedback = null;
     undone = null; // a fresh drop supersedes whatever the last one did
-    // File it into the folder next to its statement, add to the pool + re-run;
-    // matchStatement links by amount. Await so we can tell the user whether THIS
-    // booking actually got its Beleg.
-    const res = await onload(pdfs, entry);
+    // File each PDF into the folder of the booking it settles, add to the pool and
+    // re-run; matchStatement links by amount. Await so we can say, per booking,
+    // whether it actually got its Beleg.
+    const res = await onload(pdfs, lead);
     busy = false;
     if (!res) { feedback = { kind: "error" }; return; }
-    const inv = assignedInvoice(res, entry);
-    feedback = inv !== null ? { kind: "matched", invoice: inv } : { kind: "nomatch" };
+    const next = new Map<string, string | null>();
+    entries.forEach((e, i) => next.set(keyOf(e, i), assignedInvoice(res, e)));
+    covered = next;
+    const hits = [...next.values()].filter((v) => v !== null).length;
+    feedback = hits > 0 ? { kind: "matched", invoice: next.get(keyOf(lead, entries.indexOf(lead))) ?? "" } : { kind: "nomatch" };
   }
+  /** How many of the bookings in this dialog are covered now. */
+  const coveredCount = $derived(
+    entries.filter((e, i) => e.status === "matched" || covered.get(keyOf(e, i)) != null).length,
+  );
   async function onDrop(e: DragEvent) {
     e.preventDefault();
     dragging = false;
@@ -136,10 +161,10 @@
     class="modal"
     role="dialog"
     aria-modal="true"
-    aria-label={`Beleg zuordnen — ${entry.provider}`}
+    aria-label={`Beleg zuordnen — ${lead.provider}`}
   >
     <header class="modal-head">
-      <h2>Beleg zuordnen · {entry.provider}</h2>
+      <h2>{group ? "Belege zuordnen" : "Beleg zuordnen"} · {lead.provider}</h2>
       {#if url}
         <button type="button" class="ghost" onclick={() => openBeleg(url)}>
           Quelle öffnen
@@ -149,11 +174,46 @@
     </header>
 
     <div class="booking">
-      <span class="booking-label">Diese Buchung</span>
-      <div class="booking-row">
-        <span class="booking-date">{dDate(entry.date)}</span>
-        <span class="booking-amount">{money(entry.amount, entry.currency)}</span>
-      </div>
+      <span class="booking-label">
+        {#if group}
+          {entries.length} Buchungen · {coveredCount} belegt
+        {:else}
+          Diese Buchung
+        {/if}
+      </span>
+      {#if group}
+        <!-- One line per booking, each with its own state: after a drop this is the
+             list that tells you which month you forgot to download. -->
+        <ul class="booking-list" class:scrolls={entries.length > 8}>
+          {#each entries as e, i (keyOf(e, i))}
+            {@const inv = covered.get(keyOf(e, i))}
+            {@const done = e.status === "matched" || inv != null}
+            <li class:done>
+              <span class="booking-mark" aria-hidden="true">
+                {#if done}
+                  <svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
+                {/if}
+              </span>
+              <span class="booking-date">{dDate(e.date)}</span>
+              <span class="booking-amount small">{money(e.amount, e.currency)}</span>
+              <span class="booking-state">
+                {#if e.status === "matched"}
+                  war schon belegt
+                {:else if inv != null}
+                  Beleg zugeordnet
+                {:else if covered.size}
+                  noch offen
+                {/if}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <div class="booking-row">
+          <span class="booking-date">{dDate(lead.date)}</span>
+          <span class="booking-amount">{money(lead.amount, lead.currency)}</span>
+        </div>
+      {/if}
     </div>
 
     {#if !live}
@@ -166,7 +226,7 @@
     <section class="block">
       <h3>Beleg noch nicht dabei?</h3>
       {#if portals.length > 1}
-        <p>{entry.provider} rechnet über mehrere Portale ab — der Auszug verrät nicht, welches. Öffne das passende und lege die Rechnung unten ab.</p>
+        <p>{lead.provider} rechnet über mehrere Portale ab — der Auszug verrät nicht, welches. Öffne das passende und lege die Rechnungen unten ab.</p>
         <div class="portals">
           {#each portals as p (p.url)}
             <button type="button" class="ghost" onclick={() => openBeleg(p.url)}>
@@ -176,13 +236,13 @@
           {/each}
         </div>
       {:else if portals.length === 1}
-        <p>Bei {entry.provider} herunterladen und unten ablegen.</p>
+        <p>Bei {lead.provider} herunterladen und unten ablegen{group ? " — gern alle auf einmal" : ""}.</p>
         <button type="button" class="primary" onclick={() => openBeleg(portals[0].url)}>
-          Rechnung bei {entry.provider} herunterladen
+          {group ? "Rechnungen" : "Rechnung"} bei {lead.provider} herunterladen
           <svg class="ext" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
         </button>
       {:else}
-        <p>Für {entry.provider} ist kein Download-Link hinterlegt — lade die Rechnung manuell herunter und lege sie unten ab.</p>
+        <p>Für {lead.provider} ist kein Download-Link hinterlegt — lade die {group ? "Rechnungen" : "Rechnung"} manuell herunter und lege sie unten ab.</p>
       {/if}
     </section>
 
@@ -213,14 +273,25 @@
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 16V4m0 0L7 9m5-5 5 5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
         </svg>
-        <p><strong>PDF oder ZIP hierher ziehen</strong> (oder klicken)</p>
-        {#if targetLabel}
+        <p>
+          <strong>
+            {group ? "PDFs oder ZIP hierher ziehen" : "PDF oder ZIP hierher ziehen"}
+          </strong> (oder klicken)
+        </p>
+        {#if group}
+          <p class="muted">
+            Mehrere auf einmal sind genau richtig — jeder Beleg geht an die Buchung,
+            deren Betrag er trägt{#if targetLabel}, und in den Ordner neben deren
+              Auszug (also nicht alle in denselben Monat){/if}.
+          </p>
+        {:else if targetLabel}
           <p class="muted">
             Wird in <strong class="dz-target">{targetLabel}</strong> abgelegt — passend
-            benannt, neben den Auszug — und gegen diese Buchung geprüft.
+            benannt, neben den Auszug — und gegen diese Buchung geprüft. Mehrere PDFs
+            gehen auch (z. B. zwei Amazon-Rechnungen für eine Abbuchung).
           </p>
         {:else}
-          <p class="muted">Wird gescannt und gegen diese Buchung geprüft. ZIPs werden ausgepackt, Duplikate übersprungen.</p>
+          <p class="muted">Wird gescannt und gegen diese Buchung geprüft. Mehrere PDFs auf einmal sind ok, ZIPs werden ausgepackt, Duplikate übersprungen.</p>
         {/if}
       {/if}
     </div>
@@ -239,7 +310,19 @@
         {#if feedback.kind === "matched"}
           <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
           <div>
-            <strong>Beleg zugeordnet.</strong>
+            <strong>
+              {#if group}
+                {coveredCount} von {entries.length} Buchungen belegt.
+              {:else}
+                Beleg zugeordnet.
+              {/if}
+            </strong>
+            {#if group && coveredCount < entries.length}
+              <span class="fb-sub">
+                Die offenen Zeilen oben zeigen, welche Belege noch fehlen — hol sie und
+                lege sie einfach dazu.
+              </span>
+            {/if}
             {#if saved.length}
               <span class="fb-sub">Gespeichert als {saved.join(", ")}{targetLabel ? ` in ${targetLabel.split("/")[0]}` : ""}.</span>
             {:else if existing.length}
@@ -254,8 +337,21 @@
         {:else if feedback.kind === "nomatch"}
           <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4v5M8 11.5v.5" /></svg>
           <div>
-            <strong>Beleg hinzugefügt, aber kein Treffer für diese Buchung.</strong>
-            <span class="fb-sub">Erwartet wird {money(entry.amount, entry.currency)} um den {dDate(entry.date)}. Lege den passenden Beleg ab oder prüfe Betrag/Datum.</span>
+            <strong>
+              {group
+                ? "Belege hinzugefügt, aber keiner passt zu diesen Buchungen."
+                : "Beleg hinzugefügt, aber kein Treffer für diese Buchung."}
+            </strong>
+            <span class="fb-sub">
+              {#if group}
+                Offen sind {open.map((e) => money(e.amount, e.currency)).join(" · ")}. Der
+                Abgleich geht über den Betrag — stimmt der im PDF (Gesamtsumme, nicht
+                Teilbetrag)?
+              {:else}
+                Erwartet wird {money(lead.amount, lead.currency)} um den {dDate(lead.date)}.
+                Lege den passenden Beleg ab oder prüfe Betrag/Datum.
+              {/if}
+            </span>
             {#if saved.length}<span class="fb-sub">Gespeichert als {saved.join(", ")}.</span>{/if}
           </div>
         {:else if feedback.kind === "empty"}
@@ -356,6 +452,63 @@
     margin-bottom: 6px;
   }
   .booking-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  /* One row per booking in a group, with a checkmark slot that fills in as Belege
+     land. The slot is always there, so nothing shifts when it does. */
+  .booking-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  /* Only a long group scrolls; a scrollbar next to three rows is just noise. */
+  .booking-list.scrolls {
+    max-height: 40vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
+  }
+  .booking-list li {
+    display: grid;
+    grid-template-columns: 18px max-content 1fr max-content;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 0.9rem;
+  }
+  .booking-mark {
+    justify-self: center;
+    width: 14px;
+    height: 14px;
+    align-self: center;
+    color: var(--text-success);
+  }
+  .booking-mark svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    animation: pm-tick 0.24s cubic-bezier(0.2, 0, 0, 1);
+  }
+  @keyframes pm-tick { from { opacity: 0; scale: 0.25; filter: blur(4px); } }
+  @media (prefers-reduced-motion: reduce) { .booking-mark svg { animation: none; } }
+  .booking-amount.small {
+    justify-self: end;
+    font-family: var(--font-family-body);
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .booking-state {
+    justify-self: end;
+    min-width: 9ch;
+    text-align: right;
+    color: var(--text-muted);
+    font-size: 0.76rem;
+  }
+  .booking-list li.done .booking-state { color: var(--text-success); }
   .booking-date { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
   .booking-amount {
     font-family: var(--font-family-display);

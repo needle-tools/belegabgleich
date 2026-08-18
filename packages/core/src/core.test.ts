@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { canon, slug, buildProposed, dedupeNames, dedupeCharges, inferMissing, targetPath, matchStatement, isStatementFile, marketplaceSeller, merchantId, extractFields, groupRelated, type Row, type Charge, type Groupable } from "./core";
+import { canon, slug, buildProposed, dedupeNames, dedupeCharges, inferMissing, targetPath, matchStatement, isStatementFile, marketplaceSeller, merchantId, extractFields, groupRelated, findDuplicates, type Row, type Charge, type Groupable } from "./core";
 
 // Minimal Row factory for matching tests (only the matched fields matter).
 const row = (p: Partial<Row> & { provider: string; total: string }): Row => ({
@@ -255,6 +255,25 @@ test("targetPath: zip entry is extracted next to the .zip", () => {
     .toBe("C:\\root\\sub\\new.pdf");
   expect(targetPath("/root", { kind: "zip", zip: "arch.zip", entry: "x.pdf" }, "new.pdf", "/"))
     .toBe("/root/new.pdf");
+});
+
+test("findDuplicates spots one invoice filed into two month folders", () => {
+  const rows = [
+    row({ provider: "Hetzner", total: "188.01", date: "2026-03-19", invoice_number: "R0001", rel: "03/Hetzner.pdf" }),
+    row({ provider: "Hetzner", total: "188.01", date: "2026-03-19", invoice_number: "R0001", rel: "04/Hetzner.pdf" }),
+    row({ provider: "Hetzner", total: "188.01", date: "2026-04-19", invoice_number: "R0002", rel: "04/Hetzner-April.pdf" }),
+  ];
+  const dups = findDuplicates(rows);
+  expect(dups).toHaveLength(1);
+  expect(dups[0].map((r) => r.rel)).toEqual(["03/Hetzner.pdf", "04/Hetzner.pdf"]);
+});
+
+test("findDuplicates ignores the same file seen twice, and won't guess", () => {
+  const same = row({ provider: "GitHub", total: "21", date: "2026-02-01", rel: "a/x.pdf" });
+  expect(findDuplicates([same, { ...same }])).toEqual([]);       // one file, read twice
+  // Nothing identifying extracted → never called a duplicate.
+  const vague = row({ provider: "", total: "", date: "", rel: "b/y.pdf" });
+  expect(findDuplicates([vague, { ...vague, rel: "c/z.pdf" }])).toEqual([]);
 });
 
 test("dedupeNames suffixes collisions", () => {
@@ -540,13 +559,47 @@ test("groupRelated groups matched charges paid by one shared invoice", () => {
   expect(groups[0].status).toBe("matched");
 });
 
-test("groupRelated keeps unrelated and no_invoice rows solo", () => {
+test("groupRelated keeps no_invoice and one-off rows solo", () => {
   const groups = groupRelated([
     g("LOHN / GEHALT", 3000, "no_invoice"),
-    g("LOHN / GEHALT", 3000, "no_invoice"), // no embedded id → not grouped
-    g("OPENAI OPENAI.COM US", 24, "missing"), // no id → solo
+    g("LOHN / GEHALT", 3000, "no_invoice"), // payroll is never chased for a Beleg
+    g("OPENAI OPENAI.COM US", 24, "missing"), // only one of its vendor
   ]);
   expect(groups).toHaveLength(3);
+});
+
+test("groupRelated collects a vendor's open charges even without an account id", () => {
+  // Five months of the same subscription: one group you can drop five PDFs onto,
+  // not five rows to click through. No id in the descriptor is no longer a reason
+  // to leave them scattered.
+  const groups = groupRelated([
+    g("OPENAI OPENAI.COM US", 20, "missing"),
+    g("HETZNER ONLINE GMBH hetzner.com", 188.01, "missing"),
+    g("OPENAI OPENAI.COM US", 20, "missing"),
+    g("OPENAI OPENAI.COM US", 40, "missing"),
+  ]);
+  expect(groups).toHaveLength(2);
+  const openai = groups.find((x) => x.items.length > 1)!;
+  expect(openai.items).toHaveLength(3);
+  expect(openai.sum).toBeCloseTo(80);
+});
+
+test("groupRelated still splits one vendor's charges across different accounts", () => {
+  const groups = groupRelated([
+    g("GOOGLE*ADS1111111111 CC GOOGLE.COMIE", 10, "missing"),
+    g("GOOGLE*ADS1111111111 CC GOOGLE.COMIE", 20, "missing"),
+    g("GOOGLE*ADS2222222222 CC GOOGLE.COMIE", 30, "missing"),
+  ]);
+  expect(groups).toHaveLength(2);
+  expect(groups.map((x) => x.items.length)).toEqual([2, 1]);
+});
+
+test("groupRelated never lumps unidentified vendors together", () => {
+  const groups = groupRelated([
+    g("N/A", 10, "missing"),
+    g("keine", 20, "missing"),
+  ]);
+  expect(groups).toHaveLength(2);
 });
 
 test("extractFields strips a street address glued onto the header company name", () => {

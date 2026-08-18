@@ -9,6 +9,7 @@ import {
   buildProposed,
   matchStatement,
   dedupeCharges,
+  findDuplicates,
   type Charge,
   type Row,
 } from "@kah/core";
@@ -61,6 +62,8 @@ export type RunResult = {
    *  list: "500 € fehlt an Belegen, 500 € liegt unzugeordnet herum" usually means
    *  the same handful of documents, matched to nothing. */
   extras: ExtraInvoice[];
+  /** The same invoice filed in more than one place, grouped per document. */
+  duplicates: DuplicateGroup[];
   /** Invoices that can be renamed to the canonical schema (current ≠ proposed). */
   renames: RenamePlan[];
   /** Deduped statement charges — retained so a later invoice can be re-matched
@@ -112,6 +115,16 @@ export type ExtraInvoice = {
   currency: string;
 };
 
+/** One document that exists in the folder more than once. */
+export type DuplicateGroup = {
+  provider: string;
+  date: string;
+  total: string;
+  currency: string;
+  /** Every place it was found, in the order they were read. */
+  rels: string[];
+};
+
 export type RunError = { code: "no_statement"; invoiceCount: number };
 
 /** Per-PDF progress while reading. `name` is the file currently finished. */
@@ -122,6 +135,46 @@ type Parsed =
   | { kind: "statement"; charges: Charge[]; label: string; parserId: string; rel: string }
   | { kind: "invoice"; item: InvoiceItem }
   | { kind: "empty"; rel: string };
+
+/**
+ * Everything a set of PDFs contributed, read but not yet matched.
+ *
+ * Reading is the expensive half and filing depends on the cheap half: to put a
+ * dropped Beleg in the folder of the booking it settles, we have to know that
+ * booking first — but the file has to be written before the report can point at its
+ * final path. Keeping the parse separate lets the caller match, file, re-point and
+ * match again while every PDF is read exactly once.
+ */
+export type ParsedInput = { statements: StatementSource[]; invoices: InvoiceItem[]; emptyPdfs: string[] };
+
+/** Read PDFs and sort them into statements / invoices / unreadable. */
+export async function parseInputs(pdfs: CollectedPdf[], onProgress?: OnProgress): Promise<ParsedInput> {
+  configureProviderAliases();
+  const statements: StatementSource[] = [];
+  const invoices: InvoiceItem[] = [];
+  const emptyPdfs: string[] = [];
+  for (let i = 0; i < pdfs.length; i++) {
+    const pdf = pdfs[i];
+    const p = await parsePdf(pdf);
+    if (p.kind === "statement") {
+      if (!statements.some((s) => s.rel === p.rel)) {
+        statements.push({ rel: p.rel, label: p.label, parserId: p.parserId, charges: p.charges });
+      }
+    } else if (p.kind === "invoice") {
+      invoices.push(p.item);
+    } else {
+      emptyPdfs.push(p.rel);
+    }
+    onProgress?.({ done: i + 1, total: pdfs.length, name: pdf.rel });
+  }
+  return { statements, invoices, emptyPdfs };
+}
+
+/** The same parsed invoice, now living at the place it was just filed to. Keeps the
+ *  extraction (no second read) and hands the report the on-disk path. */
+export function repointInvoice(item: InvoiceItem, pdf: CollectedPdf): InvoiceItem {
+  return { row: { ...item.row, rel: pdf.rel, src: pdf.src }, pdf };
+}
 
 /** Read one PDF and classify it as a bank statement, an invoice, or empty/scan. */
 async function parsePdf(pdf: CollectedPdf): Promise<Parsed> {
@@ -215,6 +268,13 @@ function assemble(
       total: r.total,
       currency: r.currency,
     })),
+    duplicates: findDuplicates(rows).map((g) => ({
+      provider: g[0].provider,
+      date: g[0].date,
+      total: g[0].total,
+      currency: g[0].currency,
+      rels: g.map((r) => r.rel),
+    })),
     renames,
     charges: deduped,
     invoices,
@@ -224,33 +284,12 @@ function assemble(
 /** Run the full reconciliation from scratch. Throws {@link RunError} when no
  *  statement is present (an invoice on its own has nothing to match against). */
 export async function run(pdfs: CollectedPdf[], onProgress?: OnProgress): Promise<RunResult> {
-  configureProviderAliases();
-
-  const sources: StatementSource[] = [];
-  const invoices: InvoiceItem[] = [];
-  const emptyPdfs: string[] = [];
-
-  for (let i = 0; i < pdfs.length; i++) {
-    const pdf = pdfs[i];
-    const p = await parsePdf(pdf);
-    if (p.kind === "statement") {
-      if (!sources.some((s) => s.rel === p.rel)) {
-        sources.push({ rel: p.rel, label: p.label, parserId: p.parserId, charges: p.charges });
-      }
-    } else if (p.kind === "invoice") {
-      invoices.push(p.item);
-    } else {
-      emptyPdfs.push(p.rel);
-    }
-    onProgress?.({ done: i + 1, total: pdfs.length, name: pdf.rel });
-  }
-
-  if (!sources.length) {
+  const { statements, invoices, emptyPdfs } = await parseInputs(pdfs, onProgress);
+  if (!statements.length) {
     const err: RunError = { code: "no_statement", invoiceCount: invoices.length };
     throw err;
   }
-
-  return fromSources(sources, invoices, emptyPdfs);
+  return fromSources(statements, invoices, emptyPdfs);
 }
 
 /** Assemble from attributed statement sources — the path that supports removal. */
@@ -306,6 +345,13 @@ export async function addInvoices(
   pdfs: CollectedPdf[],
   onProgress?: OnProgress,
 ): Promise<RunResult> {
+  return addParsed(prev, await parseInputs(pdfs, onProgress));
+}
+
+/** The matching half of {@link addInvoices}: fold already-read documents into an
+ *  existing report. Pure, so the same parse can be matched twice — once to learn
+ *  where a Beleg belongs, once after it has been filed there. */
+export function addParsed(prev: RunResult, parsed: ParsedInput): RunResult {
   configureProviderAliases();
 
   const invoices: InvoiceItem[] = [...(prev.invoices ?? [])];
@@ -323,33 +369,25 @@ export async function addInvoices(
   const legacyFiles = [...(prev.statementFiles ?? [])];
   const legacyParsers = new Set(prev.parserIds);
 
-  for (let i = 0; i < pdfs.length; i++) {
-    const pdf = pdfs[i];
-    const p = await parsePdf(pdf);
-    if (p.kind === "statement") {
-      if (sources) {
-        if (!sources.some((s) => s.rel === p.rel)) {
-          sources.push({ rel: p.rel, label: p.label, parserId: p.parserId, charges: p.charges });
-        }
-      } else if (!legacyFiles.includes(p.rel)) {
-        // Same guard as the attributed branch above: re-reading a folder must not
-        // append the statement a second time — that would double every charge on
-        // it, and the two arrays are index-matched, so they move together.
-        legacyCharges.push(...p.charges);
-        legacyStatements.push(p.label);
-        legacyFiles.push(p.rel);
-        legacyParsers.add(p.parserId);
-      }
-    } else if (p.kind === "invoice") {
-      if (!seen.has(p.item.row.rel)) {
-        invoices.push(p.item);
-        seen.add(p.item.row.rel);
-      }
-    } else if (!emptyPdfs.includes(p.rel)) {
-      emptyPdfs.push(p.rel);
+  for (const s of parsed.statements) {
+    if (sources) {
+      if (!sources.some((x) => x.rel === s.rel)) sources.push(s);
+    } else if (!legacyFiles.includes(s.rel)) {
+      // Same guard as the attributed branch above: re-reading a folder must not
+      // append the statement a second time — that would double every charge on
+      // it, and the two arrays are index-matched, so they move together.
+      legacyCharges.push(...s.charges);
+      legacyStatements.push(s.label);
+      legacyFiles.push(s.rel);
+      legacyParsers.add(s.parserId);
     }
-    onProgress?.({ done: i + 1, total: pdfs.length, name: pdf.rel });
   }
+  for (const item of parsed.invoices) {
+    if (seen.has(item.row.rel)) continue;
+    invoices.push(item);
+    seen.add(item.row.rel);
+  }
+  for (const rel of parsed.emptyPdfs) if (!emptyPdfs.includes(rel)) emptyPdfs.push(rel);
 
   if (sources) return fromSources(sources, invoices, emptyPdfs);
   return assemble(
