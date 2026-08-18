@@ -244,7 +244,7 @@ const MONEY_RX = new RegExp(`(${CUR})?\\s*(\\d{1,3}(?:[.,]\\d{3})*[.,]\\d{2})(?!
 // currency-MARKED amount, decimals optional: "$200", "€1.234" — the currency marker
 // is required so we never mistake a quantity, year or "500 GB" for money.
 const CUR_MONEY_RX = new RegExp(`(${CUR})\\s*(\\d{1,3}(?:[.,]\\d{3})*(?:[.,]\\d{2})?)(?!\\d)|(\\d{1,3}(?:[.,]\\d{3})*(?:[.,]\\d{2})?)\\s*(${CUR})\\b`, "gi");
-const TOTAL_STRONG = /(zu zahlender betrag|gesamtbetrag|rechnungsbetrag|rechnungssumme|gesamtsumme|endbetrag|grand total|total due|total amount|amount due|balance due|amount payable|total payable|payment total|total \(?incl|total ttc|montant total|importe total|totale|total to pay|you paid|amount paid)/i;
+const TOTAL_STRONG = /(zu zahlender betrag|gesamtbetrag|rechnungsbetrag|rechnungssumme|gesamtsumme|endbetrag|grand total|total due|total amount|amount due|balance due|amount payable|total payable|payment total|invoice total|total \(?incl|total ttc|montant total|importe total|totale|total to pay|you paid|amount paid)/i;
 const TOTAL_WEAK = /(gesamt|\btotal\b|\bsumme\b|brutto|zu zahlen|\bamount\b|\bpaid\b|\bbetrag\b)/i;
 const TOTAL_NEG = /(netto|zwischensumme|sub-?total|mw-?st|u-?st\b|\bvat\b|\btax\b|steuer|excl|ohne|net amount|wechselkurs|exchange rate)/i;
 // top-of-invoice "amount due" form many SaaS print before the line items (which may
@@ -263,6 +263,11 @@ function moneyOnLine(line: string): MoneyHit[] {
   for (const m of line.matchAll(CUR_MONEY_RX)) push(m[2] ?? m[3], m[1] || m[4] || "");
   return out;
 }
+
+/** A figure worth calling a total. Zero is not: an already-settled invoice prints
+ *  "Balance due: $0.00", and taking that as the total means no charge can ever line
+ *  up with the document. */
+const isFigure = (h: MoneyHit) => h.amount > 0.005;
 
 /** Grand total + its currency, anchored on total-labels; the amount may sit on the
  *  next line (label/value split) and "$amount … due" headers count as strong. */
@@ -284,6 +289,9 @@ function findTotal(lines: string[]): MoneyHit | null {
     // breakdown (another "Gesamtsumme") doesn't override it. Among weak ones, largest.
     let replace = false;
     if (!best) replace = true;
+    // A real figure always beats a zero one, however strongly the zero is labelled:
+    // an invoice paid off on issue carries "Balance due: 0,00" below its own total.
+    else if (isFigure(hit) !== isFigure(best.hit)) replace = isFigure(hit);
     else if (score > best.score) replace = true;
     else if (score === best.score) replace = score === 3 ? false : hit.amount > best.hit.amount;
     if (replace) best = { hit, score };
@@ -300,7 +308,7 @@ function findTotal(lines: string[]): MoneyHit | null {
  * total is July's new balance (24,01 €). Matching on the total alone can never
  * link that charge to that PDF.
  */
-const CARRIED_LABEL = /(anfangs(?:guthaben|saldo)|er[oö]ffnungssaldo|saldovortrag|[uü]bertrag|vorheriger saldo|erhaltene zahlungen|zahlungseingang|bereits (?:bezahlt|beglichen)|previous balance|opening balance|balance (?:forward|brought forward)|payments? (?:received|applied)|amount paid)/i;
+const CARRIED_LABEL = /(anfangs(?:guthaben|saldo)|er[oö]ffnungssaldo|saldovortrag|[uü]bertrag|vorheriger saldo|erhaltene zahlungen|zahlungseingang|bereits (?:bezahlt|beglichen)|previous balance|opening balance|balance (?:forward|brought forward)|payments? (?:received|applied)|applied transactions?|amount paid)/i;
 
 /**
  * Amounts such a document settles, other than its own total. Deliberately narrow:

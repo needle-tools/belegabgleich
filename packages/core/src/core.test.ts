@@ -125,6 +125,39 @@ test("extractFields ignores a digit-less invoice-number fragment (Cloudflare 'In
   expect(fields.provider).toBe("Cloudflare");
 });
 
+test("extractFields reads the total of an already-settled invoice, not its zero balance", () => {
+  // A usage invoice that was paid on issue: the amount owed now is 0,00, but what
+  // the bank debited is the invoice total. Taking the zero left every such Beleg
+  // unmatchable, whatever its date.
+  const text = [
+    "INVOICE",
+    "Notion Labs, Inc.    Invoice # INV-000000001",
+    "Invoice Date  Feb 09, 2026",
+    "Terms Due Upon Receipt",
+    "Currency USD",
+    "QUANTITY DESCRIPTION RATE AMOUNT",
+    "Automation Usage    11.11 $1.00 $11.11",
+    "SUBTOTAL: $11.11",
+    "TAX: $0.00",
+    "INVOICE TOTAL: $11.11",
+    "APPLIED TRANSACTIONS:",
+    "P-00000001 Feb 16, 2026 -$11.11",
+    "BALANCE DUE: $0.00",
+  ].join("\n");
+  const { fields, complete } = extractFields(text);
+  expect(fields.provider).toBe("Notion");
+  expect(fields.date).toBe("2026-02-09");
+  expect(fields.total).toBe("11.11");   // not the 0.00 balance due
+  expect(fields.currency).toBe("USD");
+  expect(complete).toBe(true);
+
+  // …and with that figure the charge links, even 10 days off the invoice date.
+  const rows = [row({ ...fields, provider: "Notion", date: fields.date })];
+  const r = matchStatement([{ date: "2026-02-19", merchant: "NOTION LABS NOTION.SO US", amount: 11.11, currency: "USD" }], rows);
+  expect(r.matched).toHaveLength(1);
+  expect(r.missing).toHaveLength(0);
+});
+
 test("extractFields marks unknown-vendor / missing fields incomplete (→ AI fallback)", () => {
   const a = extractFields("Some random text with no recognizable brand or amounts.");
   expect(a.complete).toBe(false);
