@@ -30,6 +30,7 @@
     denied = false,
     note = "",
     onundo,
+    outcome = [],
     orphans = [],
     onlink,
     onopenpdf,
@@ -59,6 +60,14 @@
     /** Delete the files this drop just wrote and undo its effect on the report.
      *  Absent when nothing was written — then there is nothing to take back. */
     onundo?: () => Promise<boolean>;
+    /** What became of each file in the last drop — matched (and to which booking),
+     *  already in the folder, or matching nothing. */
+    outcome?: {
+      rel: string;
+      kind: "matched" | "duplicate" | "unmatched" | "statement";
+      booking?: { date: string; amount: number; currency: string; provider: string };
+      existing?: string;
+    }[];
     /** Belege in the folder that no booking claimed, closest first — candidates for
      *  a link the matcher couldn't make. */
     orphans?: ExtraInvoice[];
@@ -431,10 +440,19 @@
         {:else if feedback.kind === "nomatch"}
           <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4v5M8 11.5v.5" /></svg>
           <div>
+            <!-- Say what actually happened. "Kein Treffer für diese Buchung" is true
+                 but useless when the Beleg went to the booking one row down, or when it
+                 was already in the folder — both of which look identical from here. -->
             <strong>
-              {group
-                ? "Belege hinzugefügt, aber keiner passt zu diesen Buchungen."
-                : "Beleg hinzugefügt, aber kein Treffer für diese Buchung."}
+              {#if outcome.some((v) => v.kind === "matched")}
+                Zugeordnet — aber {group ? "nicht diesen Buchungen" : "nicht dieser Buchung"}.
+              {:else if outcome.length && outcome.every((v) => v.kind === "duplicate")}
+                {outcome.length === 1 ? "Dieser Beleg liegt" : "Diese Belege liegen"} schon im Ordner.
+              {:else if group}
+                Belege hinzugefügt, aber keiner passt zu diesen Buchungen.
+              {:else}
+                Beleg hinzugefügt, aber kein Treffer für diese Buchung.
+              {/if}
             </strong>
             <span class="fb-sub">
               {#if group}
@@ -459,6 +477,34 @@
           </div>
         {/if}
       </div>
+    {/if}
+
+    {#if outcome.length}
+      <!-- Per file, in the drop's own words. The verdict the dialog used to give was
+           only ever about the booking you clicked, so a Beleg that landed on a
+           different booking — or one that was already in the folder under its
+           canonical name — both read as "kein Treffer". -->
+      <ul class="verdicts">
+        {#each outcome as v (v.rel)}
+          <li data-kind={v.kind}>
+            <span class="v-file" use:tooltip={v.rel}>{baseName(v.rel)}</span>
+            <span class="v-what">
+              {#if v.kind === "matched"}
+                → Buchung {dDate(v.booking!.date)} · {money(v.booking!.amount, v.booking!.currency)}
+                {#if v.booking!.date !== lead.date || Math.abs(v.booking!.amount - lead.amount) > 0.01}
+                  <em>(nicht die hier geöffnete)</em>
+                {/if}
+              {:else if v.kind === "duplicate"}
+                → liegt schon im Ordner als {baseName(v.existing ?? "")}
+              {:else if v.kind === "statement"}
+                → ein Auszug, kein Beleg
+              {:else}
+                → keine offene Buchung mit diesem Betrag
+              {/if}
+            </span>
+          </li>
+        {/each}
+      </ul>
     {/if}
 
     {#if onlink && !group && orphans.length && lead.status === "missing" && covered.get(keyOf(lead, entries.indexOf(lead))) == null}
@@ -860,6 +906,36 @@
   .ghost.danger { min-height: 34px; padding: 0 12px; font-size: 0.82rem; color: #a23a2a; }
   .ghost.danger:hover { border-color: #a23a2a; }
   .ghost.danger:disabled { opacity: 0.5; cursor: default; }
+
+  /* One line per dropped file, so the dialog can be honest about files it did
+     something else with. */
+  .verdicts {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+    gap: 2px 10px;
+    font-size: 0.8rem;
+  }
+  .verdicts li {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: baseline;
+  }
+  .v-file {
+    font-family: var(--font-family-code);
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .v-what { color: var(--text-muted); }
+  .verdicts li[data-kind="matched"] .v-what { color: var(--text-success); }
+  .verdicts li[data-kind="unmatched"] .v-what { color: #9a5b1a; }
+  .v-what em { font-style: normal; opacity: 0.8; }
 
   /* The manual-assignment list: a genuine escape hatch, so it looks like part of the
      dialog rather than an error state. Checkbox | document | filename, with the

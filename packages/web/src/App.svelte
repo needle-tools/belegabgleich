@@ -500,6 +500,15 @@
   /** Folders that refused the write, by label — named, so the offer to try again can
    *  name them too. */
   let filedDeniedTargets = $state<string[]>([]);
+  /**
+   * What became of each file in the last drop.
+   *
+   * Without this the dialog could only answer about the booking you clicked, so a
+   * Beleg that landed on a DIFFERENT booking, or one that was already in the folder
+   * under another name, both showed up as "kein Treffer" — the app being right and
+   * saying nothing useful.
+   */
+  let dropOutcome = $state<DropVerdict[]>([]);
   /** What the last drop wrote, so it can be taken back out again. Only ever the
    *  files THIS drop created — never one that was already in the folder. Each write
    *  carries its own root: one drop can now land in several month folders. */
@@ -532,6 +541,7 @@
     filedTo = [];
     filedExisting = [];
     filedDenied = false;
+    dropOutcome = [];
     undoable = null;
     try {
       const { parseInputs, addParsed, repointInvoice } = await import("./lib/engine");
@@ -552,6 +562,44 @@
       // belongs in — putting it next to whichever booking was on screen is exactly how
       // a July invoice lands in 06. It stays in Downloads and shows up under "ohne
       // Buchung"; assign it by hand and the dropzone offers to file it then.
+      // What became of each file — for the dialog and for the console, because
+      // "nothing happened" with no reason given is the least helpful outcome there is.
+      const { documentKey } = await import("@kah/core");
+      const knownDocs = new Map<string, string>();
+      for (const inv of result.invoices) {
+        const key = documentKey(inv.row);
+        if (key && !knownDocs.has(key)) knownDocs.set(key, inv.row.rel);
+      }
+      const verdicts: DropVerdict[] = parsed.invoices.map((item) => {
+        const rel = item.row.rel;
+        const hit = tentative.entries.find(
+          (e) => e.status === "matched" && (e.invoice ?? "").split(", ").includes(rel),
+        );
+        if (hit) {
+          return {
+            rel,
+            kind: "matched" as const,
+            booking: { date: hit.date, amount: hit.amount, currency: hit.currency, provider: hit.provider },
+          };
+        }
+        const key = documentKey(item.row);
+        const existing = key ? knownDocs.get(key) : undefined;
+        return existing ? { rel, kind: "duplicate" as const, existing } : { rel, kind: "unmatched" as const };
+      });
+      for (const s of parsed.statements) verdicts.push({ rel: s.rel, kind: "statement" });
+      for (const v of verdicts) {
+        console.info(
+          v.kind === "matched"
+            ? `[assign] „${v.rel}" → Buchung ${v.booking!.date} ${v.booking!.amount} ${v.booking!.currency} (${v.booking!.provider})`
+            : v.kind === "duplicate"
+              ? `[assign] „${v.rel}" ist dasselbe Dokument wie „${v.existing}" — nichts hinzugefügt`
+              : v.kind === "statement"
+                ? `[assign] „${v.rel}" ist ein Auszug, kein Beleg`
+                : `[assign] „${v.rel}" passt zu keiner offenen Buchung (Betrag/Datum prüfen)`,
+        );
+      }
+      dropOutcome = verdicts;
+
       const plans = parsed.invoices.map((item) => ({
         pdf: item.pdf!,
         target: targetForStatement(statementByInvoice.get(item.row.rel)),
@@ -597,6 +645,16 @@
       progress = null;
     }
   }
+
+  /** What happened to one dropped file. */
+  type DropVerdict = {
+    rel: string;
+    kind: "matched" | "duplicate" | "unmatched" | "statement";
+    /** the booking it went to (kind "matched") */
+    booking?: { date: string; amount: number; currency: string; provider: string };
+    /** the copy already in the folder (kind "duplicate") */
+    existing?: string;
+  };
 
   /** Booking data for naming a Beleg whose own PDF names no issuer: the charge it
    *  matched, or failing that the one it was dropped on. */
@@ -924,6 +982,7 @@
     denied={filedDenied}
     note={filingNote}
     onundo={undoable ? onUndoFiling : undefined}
+    outcome={dropOutcome}
     orphans={pickerOrphans}
     onlink={live ? onLinkManual : undefined}
     onopenpdf={openInvoicePdf}
