@@ -1,12 +1,14 @@
 <script lang="ts">
-  import { type ReportEntry, money, dDate, invoiceUrlFor, descriptorOf, sourceShort } from "./report";
+  import { type ReportEntry, money, dDate, invoiceUrlFor, descriptorOf, sourceShort, rowKey } from "./report";
   import { tooltip } from "./tooltip";
+  import { cubicOut } from "svelte/easing";
   let {
     entry,
     index = 0,
     child = false,
     showSource = false,
     sourceNames,
+    justMatched,
     onpick,
   }: {
     entry: ReportEntry;
@@ -16,8 +18,30 @@
     showSource?: boolean;
     /** rel → short, distinguishing name of that document. */
     sourceNames?: Map<string, string>;
+    /** Row keys that were matched a moment ago and are on their way out. */
+    justMatched?: Set<string>;
     onpick?: (e: ReportEntry) => void;
   } = $props();
+  /** This row was just given its Beleg: say so, hold, then leave. */
+  const fresh = $derived(entry.status === "matched" && !!justMatched?.has(rowKey(entry)));
+
+  /**
+   * The exit: collapse and drift right, softer and quicker than the enter animation.
+   * Written by hand rather than composed from svelte/transition because the row is a
+   * grid item — its height, padding and the list's gap all have to close together, or
+   * the rows below jump the moment it goes.
+   */
+  function depart(node: HTMLElement) {
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const h = node.offsetHeight;
+    return {
+      duration: reduce ? 0 : 340,
+      easing: cubicOut,
+      css: (t: number, u: number) =>
+        `opacity:${t}; transform: translateX(${u * 14}px); height:${t * h}px;` +
+        `padding-top:${t * 12}px; padding-bottom:${t * 12}px; margin-bottom:${-u * 8}px; overflow:hidden;`,
+    };
+  }
   const sourceName = $derived(
     entry.source ? sourceNames?.get(entry.source.rel) || sourceShort(entry.source.rel) : "",
   );
@@ -53,7 +77,14 @@
   }
 </script>
 
-<li class="row" class:child style={`--i:${index}`} data-status={entry.status}>
+<li
+  class="row"
+  class:child
+  class:fresh
+  style={`--i:${index}`}
+  data-status={entry.status}
+  out:depart
+>
   <div class="c-name">
     <span class="dot" aria-hidden="true"></span>
     <span class="name-lines">
@@ -84,12 +115,14 @@
     {#if entry.status === "matched"}
       <span
         class="tag ok"
+        class:tag-fresh={fresh}
         use:tooltip={matchedTip}
       >
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
-        <!-- A hand-drawn link says so: "Beleg da" then rests on your judgement, not
-             on an equal total, and that difference matters when you check the list. -->
-        {entry.manual ? "Beleg da · manuell" : "Beleg da"}
+        <!-- The moment it lands, the row says what just happened; from then on it's a
+             plain state. A hand-drawn link says so too: "Beleg da" then rests on your
+             judgement, not on an equal total. -->
+        {fresh ? "Beleg zugeordnet" : entry.manual ? "Beleg da · manuell" : "Beleg da"}
       </span>
     {:else if entry.status === "missing"}
       <span class="tag warn" use:tooltip={"Zu dieser Buchung wurde kein Beleg im Ordner gefunden"}>Beleg fehlt</span>
@@ -234,6 +267,19 @@
     stroke-linejoin: round;
   }
   .tag.ok { color: var(--text-success); background: var(--surface-callout-success); }
+  /* The confirmation itself: the row washes green and the tick pops in. Both are
+     one-shot — after the wash the row is simply a matched row, until it leaves. */
+  .row.fresh {
+    background: var(--surface-callout-success);
+    border-color: color-mix(in srgb, var(--accent-brand) 45%, transparent);
+    transition: background-color 0.25s ease, border-color 0.25s ease;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .tag-fresh svg { animation: tick-in 0.3s cubic-bezier(0.2, 0, 0, 1); }
+    @keyframes tick-in {
+      from { opacity: 0; scale: 0.25; filter: blur(4px); }
+    }
+  }
   .tag.warn { color: var(--status-warn-text); background: var(--status-warn-surface); border-color: var(--status-warn-border); }
   .tag.neutral { color: var(--text-muted); background: var(--surface-panel-muted); }
 

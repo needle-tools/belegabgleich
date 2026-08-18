@@ -32,6 +32,7 @@
     onundo,
     orphans = [],
     onlink,
+    onopenpdf,
   }: {
     /** The bookings this dialog is about: one row, or a whole vendor group. */
     entries: ReportEntry[];
@@ -63,6 +64,8 @@
     orphans?: ExtraInvoice[];
     /** Link one of those to this booking by hand. Returns the re-matched report. */
     onlink?: (entry: ReportEntry, rel: string) => Promise<RunResult | null>;
+    /** Open one of them, so "is this the right one?" can be answered by looking. */
+    onopenpdf?: (rel: string) => void;
   } = $props();
 
   /** The booking that stands for the set: oldest still-open one, else the first.
@@ -420,7 +423,19 @@
                 {o.date ? dDate(o.date) : "ohne Datum"} ·
                 {isFinite(parseFloat(o.total)) ? money(parseFloat(o.total), o.currency || "EUR") : "Betrag unklar"}
               </span>
-              <span class="orphan-file" use:tooltip={o.rel}>{baseName(o.rel)}</span>
+              <!-- "Is this the right one?" is only answerable by looking at it. -->
+              {#if onopenpdf}
+                <button
+                  type="button"
+                  class="orphan-file link"
+                  onclick={() => onopenpdf?.(o.rel)}
+                  use:tooltip={`${o.rel} — PDF in einem neuen Tab öffnen`}
+                >
+                  {baseName(o.rel)}
+                </button>
+              {:else}
+                <span class="orphan-file" use:tooltip={o.rel}>{baseName(o.rel)}</span>
+              {/if}
               <button type="button" class="ghost small" disabled={!!linking || working} onclick={() => link(o.rel)}>
                 {linking === o.rel ? "Wird zugeordnet …" : "Zuordnen"}
               </button>
@@ -728,12 +743,20 @@
   .orphan-doc { font-size: 0.85rem; font-weight: 650; font-variant-numeric: tabular-nums; }
   .orphan-file {
     grid-column: 1;
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
     color: var(--text-muted);
     font-size: 0.76rem;
+    text-align: left;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .orphan-file.link { cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .orphan-file.link:hover { color: var(--accent-brand-deep); }
   .orphans button {
     grid-column: 2;
     grid-row: 1 / span 2;

@@ -139,6 +139,10 @@ export function descriptorOf(e: ReportEntry): string {
   return norm(raw) === norm(e.provider) ? "" : raw;
 }
 
+/** Identity of a report row across re-matches: the booking it stands for, not its
+ *  status. Lets the UI follow one row while its state changes under it. */
+export const rowKey = (e: ReportEntry): string => `${e.merchant ?? e.provider}|${e.date}|${e.amount}`;
+
 /** Short name of a loaded document for the "Quelle" column ("…/10/Auszug.pdf" →
  *  "Auszug"). The full path stays in the tooltip. */
 export function sourceShort(rel: string): string {

@@ -1,13 +1,14 @@
 <script lang="ts">
   import ReportRow from "./ReportRow.svelte";
   import { tooltip } from "./tooltip";
-  import { money, invoiceUrlFor, sourceShort, type EntryGroup, type ReportEntry } from "./report";
+  import { money, invoiceUrlFor, sourceShort, rowKey, type EntryGroup, type ReportEntry } from "./report";
 
   let {
     group,
     index = 0,
     showSource = false,
     sourceNames,
+    justMatched,
     onpick,
     onpickgroup,
   }: {
@@ -17,6 +18,8 @@
     showSource?: boolean;
     /** rel → short, distinguishing name of that document. */
     sourceNames?: Map<string, string>;
+    /** Row keys that were matched a moment ago and are on their way out. */
+    justMatched?: Set<string>;
     /** Opens the assign picker for ONE booking. Must reach the expanded child
      *  rows — they carry their own "Beleg holen", and without it it does nothing. */
     onpick?: (e: ReportEntry) => void;
@@ -45,8 +48,18 @@
   );
   /** The documents this group's bookings came from — one name, or how many. */
   const sources = $derived([...new Set(group.items.map((i) => i.source?.rel).filter((v): v is string => !!v))]);
+  /** Every booking in this group was just covered — the group says so before it goes. */
+  const fresh = $derived(
+    group.status === "matched" && group.items.every((i) => justMatched?.has(rowKey(i))),
+  );
   const statusLabel = $derived(
-    group.status === "matched" ? "Beleg da" : group.status === "mixed" ? "teilweise belegt" : "Beleg fehlt",
+    fresh
+      ? "Belege zugeordnet"
+      : group.status === "matched"
+        ? "Beleg da"
+        : group.status === "mixed"
+          ? "teilweise belegt"
+          : "Beleg fehlt",
   );
   const statusCls = $derived(group.status === "matched" ? "ok" : "warn");
   // Like a single row: with Belege in hand, hovering the name shows where they are.
@@ -60,7 +73,7 @@
   );
 </script>
 
-<li class="row group-parent" data-status={group.status} style={`--i:${index}`}>
+<li class="row group-parent" class:fresh data-status={group.status} style={`--i:${index}`}>
   <div class="c-name">
     <button
       class="toggle"
@@ -134,7 +147,7 @@
        differ only by transaction id, which dedupeCharges keeps them apart by), so
        provider+date+amount is not unique — the index is what separates them. -->
   {#each group.items as item, i (item.provider + item.date + item.amount + "#" + i)}
-    <ReportRow entry={item} child {showSource} {sourceNames} {onpick} />
+    <ReportRow entry={item} child {showSource} {sourceNames} {justMatched} {onpick} />
   {/each}
 {/if}
 
@@ -225,6 +238,11 @@
     border: 1px solid transparent;
   }
   .tag.ok { color: var(--text-success); background: var(--surface-callout-success); }
+  .group-parent.fresh {
+    background: var(--surface-callout-success);
+    border-color: color-mix(in srgb, var(--accent-brand) 45%, transparent);
+    transition: background-color 0.25s ease, border-color 0.25s ease;
+  }
   .tag.warn { color: var(--status-warn-text); background: var(--status-warn-surface); border-color: var(--status-warn-border); }
 
   .action {

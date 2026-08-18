@@ -20,7 +20,7 @@
   import DuplicatesNote from "./lib/DuplicatesNote.svelte";
   import { openPdfBytes } from "./lib/openBeleg";
   import { MOCK_ENTRIES, MOCK_PERIOD, MOCK_STATEMENT, DEMO_SOURCE_PATHS } from "./lib/mock";
-  import { summarize, groupEntries, byAmountDesc, money, statementLabels, type EntryGroup, type ReportEntry } from "./lib/report";
+  import { summarize, groupEntries, byAmountDesc, money, statementLabels, rowKey, type EntryGroup, type ReportEntry, type ReportStatus } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
   import { collectFromDirectory, type CollectedPdf, type FsDirHandle } from "./lib/collect";
   import { watchFolder, ensureWritable, ensureReadable, deleteFromFolder } from "./lib/folder";
@@ -110,8 +110,82 @@
           : (a: ReportEntry, b: ReportEntry) => byDoc(a, b) || byDate(a, b),
   );
 
+  /**
+   * Rows that have just been given a Beleg, and are still on screen because of it.
+   *
+   * A matched booking doesn't belong in the Fehlend list any more — but removing it
+   * the instant the drop lands takes away the only thing the user is looking for,
+   * namely that it worked. So the row stays put, flips to "Beleg zugeordnet", and
+   * only then leaves; several at once leave one after another, so you can watch the
+   * list empty rather than blink.
+   */
+  const HOLD_MS = 2000;
+  const STAGGER_MS = 280;
+  let justMatched = $state(new Set<string>());
+  const leaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Statuses as of the last render, to spot the flips. Plain, not reactive. */
+  let lastStatus = new Map<string, ReportStatus>();
+  /** Set right before an action that can match something, so a session restore or the
+   *  demo swapping in never fakes a "just matched" flourish. */
+  let announceMatches = false;
+
+  $effect(() => {
+    const now = new Map(entries.map((e) => [rowKey(e), e.status]));
+    const before = lastStatus;
+    lastStatus = now;
+    if (!announceMatches) return;
+    announceMatches = false;
+    const flipped = [...before]
+      .filter(([k, was]) => was === "missing" && now.get(k) === "matched")
+      .map(([k]) => k);
+    if (!flipped.length) return;
+    const next = new Set(untrack(() => justMatched));
+    for (const k of flipped) {
+      next.add(k);
+      if (!leaving.includes(k)) leaving.push(k);
+    }
+    justMatched = next;
+    departing = untrack(() => departing) + 1; // wakes the scheduler below
+  });
+
+  /** Keys waiting to leave, in the order they were matched. */
+  let leaving: string[] = [];
+  let departing = $state(0);
+
+  /**
+   * Start the countdowns — but not while the assign dialog is up. A row that leaves
+   * behind an overlay leaves unseen, which is the whole thing this avoids; it can
+   * wait the two seconds until the dialog is closed.
+   */
+  $effect(() => {
+    departing;
+    if (pickerEntries || !leaving.length) return;
+    const queue = leaving;
+    leaving = [];
+    queue.forEach((k, i) => {
+      clearTimeout(leaveTimers.get(k));
+      leaveTimers.set(
+        k,
+        setTimeout(() => {
+          leaveTimers.delete(k);
+          const rest = new Set(justMatched);
+          rest.delete(k);
+          justMatched = rest;
+        }, HOLD_MS + i * STAGGER_MS),
+      );
+    });
+  });
+
   const visible = $derived(
-    entries.filter((e) => filter === "all" || e.status === filter).sort(comparator),
+    entries
+      .filter(
+        (e) =>
+          filter === "all" ||
+          e.status === filter ||
+          // …plus the ones taking their leave, but only in the list they're leaving.
+          (filter === "missing" && justMatched.has(rowKey(e))),
+      )
+      .sort(comparator),
   );
 
   // Collapse recurring same-account / one-invoice rows into expandable groups.
@@ -173,6 +247,7 @@
       // the new PDFs against the charges we already parsed — the statement PDF
       // need not still be present. Only the very first load runs from scratch.
       const r = adding ? await addInvoices(result!, fresh, onP) : await run(merged, onP);
+      announceMatches = adding; // a first run has nothing to have "just" matched
       result = r;
       if (!opts.auto) filter = "missing";
       // Adding to an existing report leaves the panel looking untouched apart from
@@ -379,6 +454,7 @@
   async function onLinkManual(entry: ReportEntry, rel: string): Promise<RunResult | null> {
     if (!result) return null;
     const { linkManually } = await import("./lib/engine");
+    announceMatches = true;
     result = linkManually(result, entry, rel);
     saveSession(result);
     track("beleg_linked_manually");
@@ -478,6 +554,7 @@
       const known = new Set(sources.map((p) => p.rel));
       sources = [...sources, ...[...filed.pdfs, ...unfiled].filter((p) => !known.has(p.rel))];
 
+      announceMatches = true;
       result = addParsed(result, relocated);
       saveSession(result);
       return result;
@@ -791,6 +868,7 @@
     onundo={undoable ? onUndoFiling : undefined}
     orphans={pickerOrphans}
     onlink={live ? onLinkManual : undefined}
+    onopenpdf={openInvoicePdf}
   />
 {/if}
 
@@ -923,10 +1001,8 @@
           onclick={() => (filter = f.id)}
           use:tooltip={f.hint}
         >
-          <span class="stat-head">
-            <strong class="num">{f.count}</strong>
-            <span class="status-strip-label">{f.label}</span>
-          </span>
+          <strong class="num">{f.count}</strong>
+          <span class="status-strip-label">{f.label}</span>
           <span class="stat-sum">{money(f.sum, "EUR")}</span>
         </button>
       {/each}
@@ -951,11 +1027,11 @@
 
     {#key `${filter}:${sort}:${showSource}`}
       <ul class="rows" class:with-source={showSource}>
-        {#each groups as group, i (group.key)}
+        {#each groups as group, i (group.items.length === 1 ? rowKey(group.items[0]) : group.key)}
           {#if group.items.length === 1}
-            <ReportRow entry={group.items[0]} index={i} {showSource} {sourceNames} onpick={openPicker} />
+            <ReportRow entry={group.items[0]} index={i} {showSource} {sourceNames} {justMatched} onpick={openPicker} />
           {:else}
-            <GroupRow {group} index={i} {showSource} {sourceNames} onpick={openPicker} onpickgroup={openGroupPicker} />
+            <GroupRow {group} index={i} {showSource} {sourceNames} {justMatched} onpick={openPicker} onpickgroup={openGroupPicker} />
           {/if}
         {/each}
       </ul>
@@ -1140,11 +1216,15 @@
      shows exactly those rows. Concentric radii — the strip's 14px minus its 6px
      padding leaves 8px for a tile. */
   .status-strip { margin-bottom: 16px; flex-wrap: wrap; padding: 6px; gap: 2px; }
+  /* Count and label on the first line, the sum indented under the LABEL rather than
+     under the count: the sum belongs to what the label names, and hanging it under
+     the figure made the two numbers read as one column of unrelated digits. */
   .stat {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 1px;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: baseline;
+    justify-items: start;
+    gap: 1px 6px;
     padding: 6px 12px;
     border: 0;
     border-radius: 8px;
@@ -1155,11 +1235,15 @@
     cursor: pointer;
     transition: background-color 0.15s ease, box-shadow 0.15s ease, scale 0.12s ease;
   }
-  .stat-head { display: flex; align-items: baseline; gap: 6px; }
+  .stat .num { grid-area: 1 / 1; }
+  .stat .status-strip-label { grid-area: 1 / 2; }
+  .stat .stat-sum { grid-area: 2 / 2; }
   .stat:hover { background: var(--surface-panel-muted); }
+  /* Selected: the tint carries the state, so the ring only has to hold its edge —
+     the near-black outline the segmented control uses is far too loud at this size. */
   .stat[aria-selected="true"] {
     background: var(--control-segmented-segment-background-selected);
-    box-shadow: inset 0 0 0 1px var(--control-segmented-segment-border-color-selected);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-brand-deep) 20%, transparent);
   }
   .stat:active { scale: 0.96; }
   /* The sum answers "how bad is it?" without opening the list. Quiet: the count is
@@ -1189,10 +1273,12 @@
   .sort-control .segmented-control > button {
     font-family: var(--font-family-body);
   }
-  /* The shared stylesheet paints aria-selected; these are toggle buttons. */
+  /* The shared stylesheet paints aria-selected; these are toggle buttons. Same soft
+     ring as the filter tiles — the design system's near-black outline reads as an
+     error state at this size. */
   .sort-control .segmented-control > button.is-on {
     background: var(--control-segmented-segment-background-selected);
-    box-shadow: inset 0 0 0 1px var(--control-segmented-segment-border-color-selected);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-brand-deep) 20%, transparent);
     color: var(--text-primary);
   }
   @media (max-width: 720px) {
