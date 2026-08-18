@@ -234,51 +234,61 @@
       </p>
 
       <!-- Which files are actually in this report — at the top level, not behind
-           a disclosure. Loading a second file has to visibly add a row. -->
+           a disclosure. Loading a second file has to visibly add a row.
+
+           One card per folder: the folder is the heading, the files inside it are a
+           plain table. Twenty-one identical pills in a column were unreadable — the
+           card says where you are and the rows only have to say which file. -->
       <div class="dz-sources-wrap scroll-subtle" class:scrolls={sourcesScroll}>
         {#each sourceGroups as g (g.path)}
-          {#if manyFolders}
-            <p class="dz-folder" title={g.path}>
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 2H14V13H2z" /></svg>
-              <span class="dz-folder-name">Ordner: {g.name}</span>
-              {#if onremovemany && g.items.some((s) => s.removable)}
-                <!-- A whole month at once: loading a year and then pruning it file by
-                     file is twenty clicks. Nothing on disk is touched. -->
-                <button
-                  type="button"
-                  class="dz-remove"
-                  onclick={() => onremovemany?.(g.items.filter((s) => s.removable).map((s) => s.rel))}
-                  aria-label={`Ordner ${g.name} entfernen`}
-                  use:tooltip={`Alle ${g.items.length} Auszüge aus „${g.name}" und ihre Buchungen aus dem Bericht entfernen — die Dateien selbst bleiben unangetastet`}
-                >
-                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
-                </button>
-              {/if}
-            </p>
-          {/if}
-          <ul class="dz-sources">
-            {#each g.items as s (s.rel)}
-              <li>
-                <svg class="dz-source-icon" viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5l-3.5-3.5Z" />
-                  <path d="M9.5 1.5V5H13" />
-                </svg>
-                <span class="dz-source-name" use:tooltip={s.rel}>{shortName(s.rel)}</span>
-                <span class="dz-pill stmt">{s.label}</span>
-                {#if onremove && s.removable}
+          <section class="dz-folder-card">
+            {#if manyFolders}
+              <header class="dz-folder" title={g.path}>
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 2H14V13H2z" /></svg>
+                <span class="dz-folder-name">Ordner: {g.name}</span>
+                {#if onremovemany && g.items.some((x) => x.removable)}
+                  <!-- A whole month at once: loading a year and then pruning it file by
+                       file is twenty clicks. Nothing on disk is touched. -->
                   <button
                     type="button"
                     class="dz-remove"
-                    onclick={() => remove(s.rel)}
-                    aria-label={`${baseName(s.rel)} entfernen`}
-                    use:tooltip={"Diesen Auszug und seine Buchungen aus dem Bericht entfernen"}
+                    onclick={() => onremovemany?.(g.items.filter((x) => x.removable).map((x) => x.rel))}
+                    aria-label={`Ordner ${g.name} entfernen`}
+                    use:tooltip={`Alle ${g.items.length} Auszüge aus „${g.name}" und ihre Buchungen aus dem Bericht entfernen — die Dateien selbst bleiben unangetastet`}
                   >
                     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
                   </button>
                 {/if}
-              </li>
-            {/each}
-          </ul>
+              </header>
+            {/if}
+            <ul class="dz-sources">
+              {#each g.items as s (s.rel)}
+                <li>
+                  <span class="dz-source-file">
+                    <svg class="dz-source-icon" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5l-3.5-3.5Z" />
+                      <path d="M9.5 1.5V5H13" />
+                    </svg>
+                    <span class="dz-source-name" use:tooltip={s.rel}>{shortName(s.rel)}</span>
+                  </span>
+                  <span class="dz-pill stmt">{s.label}</span>
+                  <span class="dz-source-x">
+                    {#if onremove && s.removable}
+                      <button
+                        type="button"
+                        class="dz-remove"
+                        onclick={() => remove(s.rel)}
+                        aria-label={`${baseName(s.rel)} entfernen`}
+                        use:tooltip={"Diesen Auszug und seine Buchungen aus dem Bericht entfernen"}
+                      >
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    {/if}
+                  </span>
+                </li>
+              {/each}
+            </ul>
+          </section>
         {/each}
       </div>
 
@@ -665,7 +675,7 @@
      screenful the list scrolls in place. */
   .dz-sources-wrap {
     width: min(100%, 520px);
-    margin: 2px 0;
+    margin: 2px 0 0;
     text-align: left;
   }
   .dz-sources-wrap.scrolls {
@@ -673,26 +683,28 @@
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  /* The folder is the heading, because with a year of statements it's the folder that
-     answers "which month is this one". Sticky, so it stays answering while you scroll. */
+  /* One card per folder. The folder is a heading with a background, so it reads as
+     "these files are in here"; the files themselves are a table inside it, which a
+     column of identical pills never was. */
+  .dz-folder-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-card);
+    background: var(--surface-panel);
+    overflow: clip; /* keeps the header band inside the rounded corners */
+  }
+  .dz-folder-card + .dz-folder-card { margin-top: 10px; }
   .dz-folder {
-    position: sticky;
-    top: 0;
-    z-index: 1;
     display: flex;
     align-items: center;
     gap: 6px;
-    margin: 10px 0 4px;
-    /* Same right inset as a row's padding, so the folder's ✕ sits in the same column
-       as the files' ✕ rather than a few pixels further out. */
-    padding: 2px 12px 2px 0;
-    background: var(--surface-callout-success);
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-panel-muted);
     color: var(--text-secondary);
     font-size: var(--type-micro-label-size);
     font-weight: var(--type-micro-label-weight);
     letter-spacing: 0.01em;
   }
-  .dz-sources-wrap > .dz-folder:first-child { margin-top: 2px; }
   .dz-folder svg {
     width: 13px;
     height: 13px;
@@ -703,31 +715,36 @@
     stroke-linejoin: round;
   }
   .dz-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The folder's own remove sits at the end of its heading, like the file rows'. */
+  /* The folder's own remove sits in the same column as the files' below it. */
   .dz-folder .dz-remove { margin-left: auto; opacity: 0.55; }
   .dz-folder:hover .dz-remove, .dz-folder .dz-remove:focus-visible { opacity: 1; }
+
+  /* Column widths on the list, rows subgrid them — so the type and the ✕ line up all
+     the way down however long a filename is. */
   .dz-sources {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content max-content;
     list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    width: 100%;
     margin: 0;
     padding: 0;
-    text-align: left;
+    width: 100%;
   }
   .dz-sources li {
-    display: flex;
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-panel-muted);
+    gap: 0 12px;
+    padding: 5px 12px;
+    transition: background-color 0.12s ease;
   }
+  .dz-sources li + li { border-top: 1px solid var(--border-subtle); }
+  .dz-sources li:hover { background: var(--surface-page); }
+  .dz-source-file { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .dz-source-x { justify-self: end; width: 26px; }
   .dz-source-icon {
-    width: 16px;
-    height: 16px;
+    width: 15px;
+    height: 15px;
     flex: none;
     fill: none;
     stroke: var(--text-muted);
@@ -735,13 +752,12 @@
     stroke-linejoin: round;
   }
   .dz-source-name {
-    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.88rem;
-    font-weight: 650;
+    font-size: 0.86rem;
+    font-weight: 600;
     color: var(--text-primary);
   }
   /* In this list the type is secondary information — the filename is what you

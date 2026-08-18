@@ -19,7 +19,7 @@
   import ExtrasList from "./lib/ExtrasList.svelte";
   import DuplicatesNote from "./lib/DuplicatesNote.svelte";
   import { openPdfBytes } from "./lib/openBeleg";
-  import { MOCK_ENTRIES, MOCK_PERIOD, MOCK_STATEMENT, DEMO_SOURCE_PATHS } from "./lib/mock";
+
   import { summarize, groupEntries, byAmountDesc, money, statementLabels, rowKey, type EntryGroup, type ReportEntry, type ReportStatus } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
   import { collectFromDirectory, type CollectedPdf, type FsDirHandle } from "./lib/collect";
@@ -27,22 +27,47 @@
   import { fileIntoFolder, type FileTarget, type NameHint } from "./lib/filing";
   import { downloadCsv } from "./lib/csv";
   import { tooltip } from "./lib/tooltip";
-  import { saveSession, loadSession, clearSession, saveFolders, loadFolders } from "./lib/persist";
+  import {
+    saveSession,
+    loadSession,
+    clearSession,
+    saveFolders,
+    loadFolders,
+    saveDismissed,
+    loadDismissed,
+  } from "./lib/persist";
   import { initAnalytics, track, bucket } from "@kah/analytics";
 
   const version = `${__GIT_SHA__ || "dev"} – ${__BUILD_TIME__.slice(0, 10)}`;
 
   // Live report once the user loads their own files.
   let result = $state<RunResult | null>(null);
-  // The demo, run from the bundled PDFs so it's a real, interactive session
-  // (the picker matches against it). Shown whenever there's no real result.
-  let demoResult = $state<RunResult | null>(null);
   let busy = $state(false);
   let errorMsg = $state("");
   // Per-PDF reading progress, shown in the dropzone while the engine works.
   let progress = $state<RunProgress | null>(null);
   // All sources collected so far — multiple folders/files accumulate (deduped by rel).
   let sources = $state<CollectedPdf[]>([]);
+  /**
+   * Documents the user removed, by display path.
+   *
+   * The folder outlives the page: on the next load every picked folder is read again
+   * and everything in it comes back, so without this "entfernen" quietly undid itself
+   * on reload. It only holds off AUTOMATIC re-reads — dropping the same file in by hand
+   * is a decision that overrides it.
+   */
+  let dismissed = $state<string[]>([]);
+  function dismiss(rels: string[]) {
+    const next = [...new Set([...dismissed, ...rels])];
+    dismissed = next;
+    void saveDismissed(next);
+  }
+  function undismiss(rels: string[]) {
+    if (!rels.some((r) => dismissed.includes(r))) return;
+    const next = dismissed.filter((r) => !rels.includes(r));
+    dismissed = next;
+    void saveDismissed(next);
+  }
   /** The bookings the "Beleg zuordnen" dialog is open for: one row, or a whole
    *  vendor group — you fetch a vendor's invoices in one trip, so you should be able
    *  to hand them over in one drop. */
@@ -66,16 +91,19 @@
     if (t) void ensureWritable(t.root);
   }
 
-  const live = $derived(result !== null); // true only for the user's own data
-  // The report currently on screen: the user's result if loaded, else the demo,
-  // else the instant placeholder until the demo run finishes.
-  const active = $derived(result ?? demoResult);
-  const entries = $derived<ReportEntry[]>(active ? active.entries : MOCK_ENTRIES);
+  /**
+   * Whether there is anything to show. The app used to seed itself with a bundled
+   * demo run so the tables were never empty — but a report full of invented vendors
+   * and amounts, in a tool whose whole job is to tell you what your own numbers are
+   * missing, reads as your data until you look closely. Nothing is shown until
+   * something is loaded.
+   */
+  const live = $derived(result !== null);
+  const active = $derived(result);
+  const entries = $derived<ReportEntry[]>(result?.entries ?? []);
   const summary = $derived(summarize(entries));
-  const period = $derived(active ? active.period || "—" : MOCK_PERIOD);
-  const statementLabel = $derived(
-    active ? active.statements.join(" · ") || "Auszug" : MOCK_STATEMENT,
-  );
+  const period = $derived(result?.period || "—");
+  const statementLabel = $derived(result?.statements.join(" · ") || "");
 
   let menuOpen = $state(false);
   const closeMenu = () => (menuOpen = false);
@@ -240,7 +268,11 @@
     errorMsg = "";
     // Accumulate across drops/picks so several folders or files can be added.
     const seen = new Set(sources.map((p) => p.rel));
-    const fresh = pdfs.filter((p) => !seen.has(p.rel));
+    // A deliberate drop of something previously removed means the user wants it back.
+    if (!opts.auto) undismiss(pdfs.map((p) => p.rel));
+    const fresh = pdfs.filter(
+      (p) => !seen.has(p.rel) && !(opts.auto && dismissed.includes(p.rel)),
+    );
     void rememberFolders(pdfs); // keep the folder itself across reloads
     // Adding a folder whose PDFs are all known already changed nothing at all, and
     // silence there is what read as "it's broken". Say so instead of doing a
@@ -291,23 +323,6 @@
       return null;
     } finally {
       busy = false;
-    }
-  }
-
-  /** Fetch the bundled demo PDFs and run them into a real result. */
-  async function loadDemoResult(): Promise<RunResult | null> {
-    try {
-      const pdfs: CollectedPdf[] = await Promise.all(
-        DEMO_SOURCE_PATHS.map(async (path) => {
-          const data = await (await fetch(path)).arrayBuffer();
-          const rel = path.replace(/^\/demo\//, "");
-          return { rel, data, src: { kind: "file", path: rel } } as CollectedPdf;
-        }),
-      );
-      const { run } = await import("./lib/engine");
-      return await run(pdfs);
-    } catch {
-      return null;
     }
   }
 
@@ -522,17 +537,7 @@
       const { parseInputs, addParsed, repointInvoice } = await import("./lib/engine");
       const parsed = await parseInputs(pdfs, (p) => (progress = p));
 
-      // The demo has no folder to write into — match and be done.
-      if (!result) {
-        let base = demoResult;
-        if (!base) base = demoResult = await loadDemoResult();
-        if (!base) {
-          errorMsg = "Die Demo konnte nicht geladen werden. Bitte lade die Seite neu.";
-          return null;
-        }
-        demoResult = addParsed(base, parsed);
-        return demoResult;
-      }
+      if (!result) return null; // the picker only exists once a report does
 
       // Where does each new Beleg belong? Match once to find out, without keeping
       // the outcome: these rows still carry their Downloads-folder paths.
@@ -775,8 +780,10 @@
     if (!result) return;
     const { removeDocument } = await import("./lib/engine");
     const next = removeDocument(result, rel);
-    // Drop it from the accumulator too, or the next load would re-add it.
+    // Drop it from the accumulator too, or the next load would re-add it — and
+    // remember it, or the next FOLDER READ would.
     sources = sources.filter((p) => p.rel !== rel);
+    dismiss([rel]);
     if (!next) {
       reset();
       return;
@@ -800,6 +807,7 @@
     }
     const gone = new Set(rels);
     sources = sources.filter((p) => !gone.has(p.rel));
+    dismiss(rels);
     if (!next) {
       reset(); // that was the last statement — nothing left to reconcile against
       return;
@@ -815,11 +823,10 @@
     filter = "missing";
     sources = [];
     folders = [];
+    dismissed = [];
     lockedFolders = [];
     awaitingDemo = false;
-    clearSession(); // wipes the stored report AND the remembered folders
-    // fall back to the demo; reload it if it was cleared/never loaded
-    if (!demoResult) loadDemoResult().then((d) => { if (!result && !demoResult) demoResult = d; });
+    clearSession(); // wipes the stored report, the remembered folders and removals
   }
 
   /** Open a read invoice by its display path. Only works while its bytes are in
@@ -870,31 +877,34 @@
       host: import.meta.env.VITE_RYBBIT_HOST || "https://analytics-2.needle.tools",
     });
     track("app_loaded");
-    // Restore the previous session (if any) so a refresh doesn't lose the report;
-    // otherwise seed the interactive demo from the bundled PDFs.
-    loadSession().then(async (r) => {
-      if (r && !result) { result = r; return; }
-      if (!result && !demoResult) {
-        const d = await loadDemoResult();
-        if (!result && !demoResult) demoResult = d;
-      }
-    });
-    // Bring back the folders themselves. Access usually needs a click (Chrome asks
-    // again each session); where it's still granted we just pick up where we were.
-    loadFolders().then(async (saved) => {
-      if (!saved.length) return;
-      folders = saved;
-      const locked: string[] = [];
-      for (const handle of saved) {
-        const granted = handle.queryPermission
-          ? (await handle.queryPermission({ mode: "read" })) === "granted"
-          : false;
-        if (granted) await adoptFolder(handle);
-        else locked.push(handle.name);
-      }
-      lockedFolders = locked;
-    });
+    void restore();
   });
+
+  /**
+   * Bring the last session back, in this order for a reason: the list of removed
+   * documents has to be in hand BEFORE any folder is read again, or the re-read
+   * re-adds exactly what the user threw out — which is what "they come back after a
+   * reload" was.
+   */
+  async function restore() {
+    const [saved, removed] = await Promise.all([loadSession(), loadDismissed()]);
+    dismissed = removed;
+    if (saved && !result) result = saved;
+    // The folders themselves. Access usually needs a click (Chrome asks again each
+    // session); where it's still granted we just pick up where we were.
+    const handles = await loadFolders();
+    if (!handles.length) return;
+    folders = handles;
+    const locked: string[] = [];
+    for (const handle of handles) {
+      const granted = handle.queryPermission
+        ? (await handle.queryPermission({ mode: "read" })) === "granted"
+        : false;
+      if (granted) await adoptFolder(handle);
+      else locked.push(handle.name);
+    }
+    lockedFolders = locked;
+  }
 </script>
 
 <svelte:window onkeydown={(e) => { if (e.key === "Escape") { menuOpen = false; pickerEntries = null; } }} />
@@ -989,13 +999,15 @@
       {/if}
     </div>
 
-    <div class="app-intro-meter">
-      <div class="meter-head">
-        <span class="micro-label">Belegquote</span>
-        <span class="meter-period">{period}</span>
+    {#if live}
+      <div class="app-intro-meter">
+        <div class="meter-head">
+          <span class="micro-label">Belegquote</span>
+          <span class="meter-period">{period}</span>
+        </div>
+        <CompletenessMeter coverage={summary.coverage} matched={summary.matched} total={summary.total} compact={live} />
       </div>
-      <CompletenessMeter coverage={summary.coverage} matched={summary.matched} total={summary.total} compact={live} />
-    </div>
+    {/if}
   </section>
 
   <!-- UPLOAD -->
@@ -1027,6 +1039,7 @@
         <h2>Buchungen &amp; Belege</h2>
         <span class="source">{statementLabel}</span>
       </div>
+      {#if live}
       <div class="sort-control" role="group" aria-label="Sortierung">
         <span class="sort-label">Sortieren</span>
         <div class="segmented-control">
@@ -1053,8 +1066,18 @@
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3 3-3M3 13h10" /></svg>
         CSV exportieren
       </button>
+      {/if}
     </div>
 
+    {#if !live}
+      <!-- Nothing loaded: say so, rather than filling the table with example data
+           that looks exactly like a finished report. -->
+      <p class="report-empty">
+        Noch keine Dateien geladen. Lege oben deinen Kontoauszug oder deine
+        Kreditkartenabrechnung ab — mit dem Ordner deiner Rechnungen dazu siehst du hier,
+        welcher Buchung noch ein Beleg fehlt.
+      </p>
+    {:else}
     <div class="status-strip" role="tablist" aria-label="Buchungen filtern">
       {#each filters as f (f.id)}
         <button
@@ -1100,13 +1123,10 @@
       <p class="empty">Nichts in dieser Ansicht.</p>
     {/if}
     {/if}
+    {/if}
 
     {#if live && result?.duplicates?.length}
       <DuplicatesNote duplicates={result.duplicates} />
-    {/if}
-
-    {#if !live}
-      <p class="mock-note">Demodaten — lade oben deinen Auszug und deine Rechnungen für den echten Abgleich.</p>
     {/if}
 
     <p class="accuracy-note">
@@ -1385,11 +1405,11 @@
     .rows { display: flex; flex-direction: column; }
   }
   .empty { color: var(--text-muted); padding: 24px; text-align: center; }
-  .mock-note {
-    margin: 16px 0 0;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    text-align: center;
+  .report-empty {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--text-secondary);
+    font-size: 0.94rem;
   }
   /* Says plainly that the matching is a guess. Quiet, but always present — the
      report must never read as a certificate of completeness. */

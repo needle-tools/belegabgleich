@@ -15,6 +15,7 @@ const DB_NAME = "kah";
 const STORE = "session";
 const KEY = "current";
 const FOLDERS_KEY = "folders";
+const DISMISSED_KEY = "dismissed";
 
 function withStore<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -90,6 +91,7 @@ export async function clearSession(): Promise<void> {
   try {
     await withStore("readwrite", (s) => s.delete(KEY));
     await withStore("readwrite", (s) => s.delete(FOLDERS_KEY));
+    await withStore("readwrite", (s) => s.delete(DISMISSED_KEY));
   } catch {
     /* ignore */
   }
@@ -113,6 +115,31 @@ export async function saveFolders(handles: FsDirHandle[]): Promise<void> {
     // Not fatal — the user just picks the folder again — but silence here is what
     // made this look like it "sometimes forgets", so say it.
     console.warn("[folders] konnten nicht gespeichert werden:", e);
+  }
+}
+
+/**
+ * Documents the user removed from the report, by display path.
+ *
+ * This has to outlive the page, because the folder does: on the next load the picked
+ * folders are re-read and every PDF in them comes back — so without a record of what
+ * was thrown out, "entfernen" silently undoes itself on reload. Dropping the same file
+ * in again by hand clears its entry; only automatic re-reads are held off.
+ */
+export async function saveDismissed(rels: string[]): Promise<void> {
+  try {
+    await withStore("readwrite", (s) => s.put(Array.from(rels), DISMISSED_KEY));
+  } catch (e) {
+    console.warn("[dismissed] konnte nicht gespeichert werden:", e);
+  }
+}
+
+export async function loadDismissed(): Promise<string[]> {
+  try {
+    const saved = await withStore<string[] | undefined>("readonly", (s) => s.get(DISMISSED_KEY));
+    return Array.isArray(saved) ? saved.filter((r) => typeof r === "string") : [];
+  } catch {
+    return [];
   }
 }
 
