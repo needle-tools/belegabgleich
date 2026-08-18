@@ -337,11 +337,15 @@
         <div class="dz-sort">
           <span>
             <strong>{sortable}</strong>
-            {sortable === 1 ? "Beleg liegt" : "Belege liegen"} noch im Download-Ordner —
+            {sortable === 1 ? "Beleg liegt" : "Belege liegen"} noch dort, wo der Browser
+            {sortable === 1 ? "ihn" : "sie"} heruntergeladen hat —
             {#if sortTargets.length === 1}
-              gehört nach <strong>{sortTargets[0]}</strong>.
+              {sortable === 1 ? "gehört" : "gehören"} nach <strong>{sortTargets[0]}</strong>,
+              zum Auszug der jeweiligen Buchung.
             {:else}
-              verteilt auf {sortTargets.length} Ordner ({sortTargets.join(", ")}).
+              {sortable === 1 ? "gehört" : "gehören"} verteilt in
+              {sortTargets.length} Ordner ({sortTargets.join(", ")}), jeweils zum Auszug der
+              Buchung.
             {/if}
           </span>
           <button type="button" class="dz-btn primary" disabled={working} onclick={() => onsort?.()}>
