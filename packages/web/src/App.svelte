@@ -1401,8 +1401,30 @@
     text-transform: uppercase;
     color: var(--text-muted);
   }
+  /* The same box as the CSV button beside it: 36px tall, 14px inline padding, control
+     radius, strong border. The design system's segmented control is a 30px pill in the
+     code font, which next to a 36px 12px-radius button reads as two different toolbars
+     that happen to sit on one line. */
+  .sort-control .segmented-control {
+    min-height: 36px;
+    border-radius: var(--radius-control);
+    border-color: var(--border-strong);
+  }
   .sort-control .segmented-control > button {
+    min-height: 34px; /* the track's 1px border top and bottom makes up the 36 */
+    padding-inline: 14px;
     font-family: var(--font-family-body);
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+  /* Concentric: the track's 12px minus its own 1px border. */
+  .sort-control .segmented-control > button:first-child {
+    border-top-left-radius: calc(var(--radius-control) - 1px);
+    border-bottom-left-radius: calc(var(--radius-control) - 1px);
+  }
+  .sort-control .segmented-control > button:last-child {
+    border-top-right-radius: calc(var(--radius-control) - 1px);
+    border-bottom-right-radius: calc(var(--radius-control) - 1px);
   }
   /* The shared stylesheet paints aria-selected; these are toggle buttons. Same soft
      ring as the filter tiles — the design system's near-black outline reads as an
