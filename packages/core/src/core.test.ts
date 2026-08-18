@@ -175,6 +175,25 @@ test("extractFields guesses an unknown issuer from a legal-entity header (fallba
   expect(extractFields("Acme Tagline\nTotal 10,00 EUR\nDatum 04.06.2026").fields.provider).toBe("");
 });
 
+test("extractFields finds the issuer when the header shares its line with 'Bill to'", () => {
+  // Stripe-style invoices put the issuer and the bill-to label in one line with a
+  // single space between them, which is not a column break — the whole line used to be
+  // discarded as a bill-to line, and the only name on the page went with it.
+  const text = [
+    "Invoice",
+    "Invoice number ABC12345 0001",
+    "Date of issue June 4, 2026",
+    "Muster Werkzeuge GmbH Bill to",
+    "Musterstr 7 Erika Beispiel",
+    "12345 Musterstadt Bangkok",
+    "Total €222.75",
+  ].join("\n");
+  const { fields, complete } = extractFields(text);
+  expect(fields.provider).toBe("Muster Werkzeuge GmbH");
+  expect(fields.total).toBe("222.75");
+  expect(complete).toBe(false); // a header guess never counts as a recognized brand
+});
+
 test("extractFields handles GBP and DD/MM/YYYY", () => {
   const text = "Hetzner Online GmbH\nInvoice date 04/06/2026\nTotal due £1,234.56";
   const { fields } = extractFields(text);
@@ -546,6 +565,51 @@ test("matchStatement: a manual link takes its invoice away from the automatic ma
   expect(linked.matched).toHaveLength(1);
   expect(linked.matched[0].charge.date).toBe("2026-01-15");
   expect(linked.missing.map((c) => c.date)).toEqual(["2026-02-15"]);
+});
+
+test("matchStatement: several hand-picked Belege can cover one booking", () => {
+  // One Amazon charge, two invoices that don't add up to it (a partial refund, a
+  // gift card) — nothing automatic will ever pair them, but the user knows.
+  const rows = [
+    row({ provider: "Amazon", total: "5.00", date: "2026-04-07", rel: "a1.pdf" }),
+    row({ provider: "Amazon", total: "1.00", date: "2026-04-07", rel: "a2.pdf" }),
+  ];
+  const charge: Charge = { date: "2026-04-11", merchant: "AMAZON.DE", amount: 95.14, currency: "EUR" };
+  const r = matchStatement([charge], rows, [
+    { charge: chargeKey(charge), rel: "a1.pdf" },
+    { charge: chargeKey(charge), rel: "a2.pdf" },
+  ]);
+  expect(r.matched).toHaveLength(1);
+  expect(r.matched[0].rows.map((x) => x.rel)).toEqual(["a1.pdf", "a2.pdf"]);
+  expect(r.matched[0].manual).toBe(true);
+  expect(r.unmatchedInvoices).toHaveLength(0);
+});
+
+test("matchStatement: a released pair stays released", () => {
+  // Releasing an automatic match has to outlive the re-match that follows it, or the
+  // equal totals simply re-derive the link and nothing happened.
+  const rows = [row({ provider: "Hetzner", total: "188.01", date: "2026-03-19", rel: "h.pdf" })];
+  const charge: Charge = { date: "2026-03-20", merchant: "HETZNER ONLINE GMBH", amount: 188.01, currency: "EUR" };
+  expect(matchStatement([charge], rows).matched).toHaveLength(1);
+
+  const r = matchStatement([charge], rows, [{ charge: chargeKey(charge), rel: "h.pdf", mode: "reject" }]);
+  expect(r.matched).toHaveLength(0);
+  expect(r.missing).toHaveLength(1);
+  expect(r.unmatchedInvoices.map((x) => x.rel)).toEqual(["h.pdf"]);
+});
+
+test("matchStatement: a release applies to that pair only, not to the vendor", () => {
+  const rows = [
+    row({ provider: "Resend", total: "20.00", date: "2026-01-15", rel: "jan.pdf" }),
+    row({ provider: "Resend", total: "30.00", date: "2026-02-15", rel: "feb.pdf" }),
+  ];
+  const jan: Charge = { date: "2026-01-15", merchant: "RESEND RESEND.COM US", amount: 20, currency: "USD" };
+  const feb: Charge = { date: "2026-02-15", merchant: "RESEND RESEND.COM US", amount: 30, currency: "USD" };
+  const r = matchStatement([jan, feb], rows, [{ charge: chargeKey(jan), rel: "jan.pdf", mode: "reject" }]);
+  expect(r.matched).toHaveLength(1);
+  expect(r.matched[0].charge.date).toBe("2026-02-15"); // February is untouched
+  expect(r.missing.map((c) => c.date)).toEqual(["2026-01-15"]);
+  expect(r.unmatchedInvoices.map((x) => x.rel)).toEqual(["jan.pdf"]); // …and its Beleg is free again
 });
 
 test("matchStatement: a stale manual link is ignored, not fatal", () => {

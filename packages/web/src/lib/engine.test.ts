@@ -7,7 +7,7 @@
  */
 import { expect, test } from "bun:test";
 import { chargeKey } from "@kah/core";
-import { linkManually, removeDocument, repointResult, type RunResult } from "./engine";
+import { linkManually, removeDocument, repointResult, unmatchEntry, type RunResult } from "./engine";
 import type { CollectedPdf } from "./collect";
 
 const charge = (merchant: string, date: string, amount: number) => ({
@@ -115,7 +115,7 @@ test("a hand-drawn link follows its Beleg into the folder", () => {
   const linked = linkManually(
     { ...dropped, charges: [charge("HETZNER", "2026-03-14", 12.9)] } as RunResult,
     entry as never,
-    "Rechnung.pdf",
+    ["Rechnung.pdf"],
   );
   expect(linked.entries.find((e) => e.merchant === "HETZNER")?.manual).toBe(true);
   expect(linked.manualLinks[0].charge).toBe(chargeKey(charge("HETZNER", "2026-03-14", 12.9)));
@@ -128,6 +128,20 @@ test("a hand-drawn link follows its Beleg into the folder", () => {
   const moved = repointResult(linked, [{ from: "Rechnung.pdf", to: filed }]);
   expect(moved.manualLinks[0].rel).toBe("Belege/03/Hetzner-2026-03-14.pdf");
   expect(moved.entries.find((e) => e.merchant === "HETZNER")?.status).toBe("matched");
+});
+
+test("releasing a match keeps it released across the re-match", () => {
+  const withInvoice = base();
+  withInvoice.invoices = [invoice("Hetzner", "2026-03-14", "12.90", "hetzner.pdf")];
+  withInvoice.charges = [charge("HETZNER", "2026-03-14", 12.9)];
+  const matchedRow = removeDocument(withInvoice, "nothing.pdf")!.entries.find((e) => e.merchant === "HETZNER")!;
+  expect(matchedRow.status).toBe("matched");
+
+  const released = unmatchEntry({ ...withInvoice, entries: [matchedRow] } as RunResult, matchedRow);
+  const row = released.entries.find((e) => e.merchant === "HETZNER")!;
+  expect(row.status).toBe("missing");                        // the booking is open again…
+  expect(released.extras.map((x) => x.rel)).toEqual(["hetzner.pdf"]); // …and its Beleg is free
+  expect(released.manualLinks[0].mode).toBe("reject");       // …and it stays that way
 });
 
 test("removing a text-less PDF drops it from the skipped list", () => {

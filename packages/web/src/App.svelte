@@ -16,7 +16,7 @@
   import DropOverlay from "./lib/DropOverlay.svelte";
   import PickerModal from "./lib/PickerModal.svelte";
   import RenamePanel from "./lib/RenamePanel.svelte";
-  import ExtrasPanel from "./lib/ExtrasPanel.svelte";
+  import ExtrasList from "./lib/ExtrasList.svelte";
   import DuplicatesNote from "./lib/DuplicatesNote.svelte";
   import { openPdfBytes } from "./lib/openBeleg";
   import { MOCK_ENTRIES, MOCK_PERIOD, MOCK_STATEMENT, DEMO_SOURCE_PATHS } from "./lib/mock";
@@ -80,7 +80,7 @@
   let menuOpen = $state(false);
   const closeMenu = () => (menuOpen = false);
 
-  type Filter = "missing" | "all" | "matched" | "no_invoice";
+  type Filter = "missing" | "all" | "matched" | "no_invoice" | "no_booking";
   let filter = $state<Filter>("missing");
 
   // How the rows are ordered. A–Z first: looking for one vendor's Beleg is the
@@ -201,6 +201,17 @@
   /** rel → short, distinguishing name of that document, for the "Quelle" column. */
   const sourceNames = $derived(statementLabels(active?.statementSources ?? []));
 
+  /** The Belege that matched nothing — the same reconciliation from the other side,
+   *  so they are one more view of this table rather than a panel of their own. */
+  const extras = $derived(live ? (result?.extras ?? []) : []);
+  /** Their total in EUR. Foreign-currency Belege are counted separately rather than
+   *  summed at an invented rate. */
+  const extrasEur = $derived(extras.filter((e) => !e.currency || e.currency.toUpperCase() === "EUR"));
+  const extrasSum = $derived(
+    extrasEur.reduce((n, e) => n + (isFinite(parseFloat(e.total)) ? parseFloat(e.total) : 0), 0),
+  );
+  const extrasForeign = $derived(extras.length - extrasEur.length);
+
   /**
    * The filter IS the summary. Two controls saying the same thing (a segmented
    * "Fehlend 4 · Zugeordnet 7 · Alle 15" above a strip of "4 FEHLEND · 7
@@ -217,6 +228,10 @@
       hint: "Buchungen ohne Beleg — die Arbeit, die noch vor dir liegt" },
     { id: "no_invoice", label: "kein Beleg nötig", count: summary.noInvoice, sum: summary.sum.noInvoice,
       hint: "Gehalt, Steuer, Kartenabrechnung — dafür stellt niemand eine Rechnung" },
+    { id: "no_booking", label: "ohne Buchung", count: extras.length, sum: extrasSum,
+      hint: extrasForeign
+        ? `Belege im Ordner, zu denen keine Buchung passt (${extrasForeign} davon in Fremdwährung, nicht in der Summe)`
+        : "Belege im Ordner, zu denen keine Buchung passt — vergleiche die Summe mit „fehlend“" },
   ]);
 
   /** `auto`: added by the folder watcher rather than by the user — don't count it
@@ -331,36 +346,29 @@
   }
 
   /** The same, for a statement's display path directly — which is what a matched
-   *  Beleg gives us: the folder of the document carrying the booking it settles. */
+   *  Beleg gives us: the folder of the document carrying the booking it settles.
+   *
+   *  Deliberately unwilling to guess. It resolves the folder that actually holds that
+   *  statement (its own handle, or the same-named picked root after a reload) and
+   *  otherwise returns null, because the alternative — "write it next to some other
+   *  file that came from a real folder" — is how a July invoice ends up in 06. */
   function targetForStatement(rel: string | undefined): FileTarget | null {
     if (!rel || !result) return null;
     const { rootName, subdir } = relFolder(rel);
-    // The statement's own file is the first choice, but it need not still be in
-    // hand: a restored session keeps the bookings and drops the PDFs. The rel still
-    // names the picked folder, so any file collected from that same folder gets us
-    // back to the right handle — and failing that, we file next to whatever else
-    // came out of a real folder rather than not filing at all.
     const own = sources.find((p) => p.rel === rel)?.root;
-    const sameRoot = sources.find((p) => p.root?.name === rootName)?.root ?? folders.find((f) => f.name === rootName);
-    const anyRoot = sources.find((p) => p.root);
-    const pick = own ? { root: own, subdir } : sameRoot ? { root: sameRoot, subdir } : null;
-    const target =
-      pick ??
-      (anyRoot?.root
-        ? { root: anyRoot.root, subdir: relFolder(anyRoot.rel).subdir }
-        : folders[0]
-          ? { root: folders[0], subdir }
-          : null);
-    if (!target) {
-      // Worth saying out loud: this is the difference between "filed into your
-      // folder" and "only in the report", and it's invisible otherwise.
+    const sameRoot =
+      sources.find((p) => p.root?.name === rootName)?.root ?? folders.find((f) => f.name === rootName);
+    const root = own ?? sameRoot;
+    if (!root) {
+      // Worth saying out loud: this is the difference between "filed into your folder"
+      // and "only in the report", and it's invisible otherwise.
       console.info(
         `[filing] kein Ordner-Handle für „${rel}" — die Dateien kamen nicht über „Ordner wählen" (oder die Seite wurde seither neu geladen)`,
       );
       return null;
     }
-    const label = target.subdir ? `${target.root.name}/${target.subdir}` : target.root.name;
-    return { ...target, label };
+    const label = subdir ? `${root.name}/${subdir}` : root.name;
+    return { root, subdir, label };
   }
 
   /** Folder a drop in the open picker would be saved to, for the picker's hint. */
@@ -438,7 +446,7 @@
         filed.saved.length
           ? `${filed.saved.length} ${filed.saved.length === 1 ? "Beleg" : "Belege"} einsortiert`
           : filed.denied
-            ? "Nicht einsortiert — der Schreibzugriff wurde abgelehnt"
+            ? `Nicht einsortiert — kein Schreibzugriff auf ${filed.deniedTargets.join(", ") || "den Ordner"}`
             : "Nichts einsortiert — die Belege lagen schon im Ordner",
       );
       track("belege_filed", { bucket: bucket(filed.saved.length) });
@@ -450,20 +458,33 @@
     }
   }
 
-  /** Record "this Beleg belongs to this booking", whatever the matcher thinks. */
-  async function onLinkManual(entry: ReportEntry, rel: string): Promise<RunResult | null> {
+  /** Record "these Belege belong to this booking", whatever the matcher thinks. */
+  async function onLinkManual(entry: ReportEntry, rels: string[]): Promise<RunResult | null> {
     if (!result) return null;
     const { linkManually } = await import("./lib/engine");
     announceMatches = true;
-    result = linkManually(result, entry, rel);
+    result = linkManually(result, entry, rels);
     saveSession(result);
-    track("beleg_linked_manually");
+    track("beleg_linked_manually", { bucket: bucket(rels.length) });
     return result;
+  }
+
+  /** Release a booking's Beleg again — and keep it released (see unmatchEntry). */
+  async function onUnmatch(entry: ReportEntry) {
+    if (!result) return;
+    const { unmatchEntry } = await import("./lib/engine");
+    result = unmatchEntry(result, entry);
+    saveSession(result);
+    notify(`Zuordnung aufgehoben — ${entry.provider} gilt wieder als offen`);
+    track("beleg_unmatched");
   }
   // Outcome of the last picker drop, shown in its feedback block.
   let filedTo = $state<string[]>([]);
   let filedExisting = $state<string[]>([]);
   let filedDenied = $state(false);
+  /** Folders that refused the write, by label — named, so the offer to try again can
+   *  name them too. */
+  let filedDeniedTargets = $state<string[]>([]);
   /** What the last drop wrote, so it can be taken back out again. Only ever the
    *  files THIS drop created — never one that was already in the folder. Each write
    *  carries its own root: one drop can now land in several month folders. */
@@ -473,7 +494,7 @@
     !live
       ? ""
       : filedDenied
-        ? "Nicht im Ordner gespeichert: Der Schreibzugriff wurde abgelehnt. Beim nächsten Zuordnen erlauben — dann landet der Beleg direkt im Ordner."
+        ? `Nicht gespeichert: ${filedDeniedTargets.length ? `Der Schreibzugriff auf ${filedDeniedTargets.join(", ")} wurde nicht erteilt` : "Der Schreibzugriff wurde abgelehnt"}. Die Belege bleiben liegen, wo sie sind — über „Belege einsortieren“ im Feld oben lässt sich der Zugriff erneut anfragen.`
         : !pickerTarget
           ? "Nicht im Ordner gespeichert: Es gibt keinen beschreibbaren Ordner. Öffne ihn einmal über „Ordner wählen“ (nach einem Neuladen der Seite erneut) — danach werden Belege direkt dort abgelegt."
           : "",
@@ -521,12 +542,14 @@
         if (e.status !== "matched" || !e.invoice || !e.source) continue;
         for (const rel of e.invoice.split(", ")) statementByInvoice.set(rel, e.source.rel);
       }
-      // A Beleg that matched nothing goes where the booking you dropped it on lives.
-      const fallback = targetFor(entry) ?? targetForStatement(statementRelFor(entry ?? tentative.entries[0]));
-
+      // Only Belege that actually matched a booking get filed, and only into that
+      // booking's folder. A Beleg that matched nothing has no folder it demonstrably
+      // belongs in — putting it next to whichever booking was on screen is exactly how
+      // a July invoice lands in 06. It stays in Downloads and shows up under "ohne
+      // Buchung"; assign it by hand and the dropzone offers to file it then.
       const plans = parsed.invoices.map((item) => ({
         pdf: item.pdf!,
-        target: targetForStatement(statementByInvoice.get(item.row.rel)) ?? fallback,
+        target: targetForStatement(statementByInvoice.get(item.row.rel)),
         hint: hintFor(item.row.rel, tentative, entry),
       }));
       // Statements and unreadable PDFs dropped in here are not filed anywhere; they
@@ -538,6 +561,7 @@
       filedTo = filed.saved;
       filedExisting = filed.existing;
       filedDenied = filed.denied;
+      filedDeniedTargets = filed.deniedTargets;
 
       // Same parse, new locations — nothing is read a second time.
       const byOldRel = new Map(plans.map((pl, i) => [pl.pdf.rel, filed.pdfs[i]]));
@@ -975,8 +999,24 @@
   <section class="report" id="report">
     <div class="report-head">
       <div class="report-title">
-        <h2>Fehlende Belege</h2>
+        <h2>Buchungen &amp; Belege</h2>
         <span class="source">{statementLabel}</span>
+      </div>
+      <div class="sort-control" role="group" aria-label="Sortierung">
+        <span class="sort-label">Sortieren</span>
+        <div class="segmented-control">
+          {#each SORTS as s (s.id)}
+            <button
+              type="button"
+              aria-pressed={sort === s.id}
+              class:is-on={sort === s.id}
+              onclick={() => (sort = s.id)}
+              use:tooltip={s.hint}
+            >
+              {s.label}
+            </button>
+          {/each}
+        </div>
       </div>
       <button
         class="btn-export"
@@ -1006,32 +1046,26 @@
           <span class="stat-sum">{money(f.sum, "EUR")}</span>
         </button>
       {/each}
-      <div class="strip-spacer"></div>
-      <div class="sort-control" role="group" aria-label="Sortierung">
-        <span class="sort-label">Sortieren</span>
-        <div class="segmented-control">
-          {#each SORTS as s (s.id)}
-            <button
-              type="button"
-              aria-pressed={sort === s.id}
-              class:is-on={sort === s.id}
-              onclick={() => (sort = s.id)}
-              use:tooltip={s.hint}
-            >
-              {s.label}
-            </button>
-          {/each}
-        </div>
-      </div>
     </div>
 
+    {#if filter === "no_booking"}
+      {#if extras.length}
+        <ExtrasList {extras} onopen={openInvoicePdf} />
+      {:else}
+        <p class="empty">
+          {live
+            ? "Jeder gelesene Beleg gehört zu einer Buchung."
+            : "Diese Ansicht zeigt Belege ohne Buchung — lade dazu deinen Auszug und deinen Rechnungsordner."}
+        </p>
+      {/if}
+    {:else}
     {#key `${filter}:${sort}:${showSource}`}
       <ul class="rows" class:with-source={showSource}>
         {#each groups as group, i (group.items.length === 1 ? rowKey(group.items[0]) : group.key)}
           {#if group.items.length === 1}
-            <ReportRow entry={group.items[0]} index={i} {showSource} {sourceNames} {justMatched} onpick={openPicker} />
+            <ReportRow entry={group.items[0]} index={i} {showSource} {sourceNames} {justMatched} onpick={openPicker} onunmatch={live ? onUnmatch : undefined} />
           {:else}
-            <GroupRow {group} index={i} {showSource} {sourceNames} {justMatched} onpick={openPicker} onpickgroup={openGroupPicker} />
+            <GroupRow {group} index={i} {showSource} {sourceNames} {justMatched} onpick={openPicker} onpickgroup={openGroupPicker} onunmatch={live ? onUnmatch : undefined} />
           {/if}
         {/each}
       </ul>
@@ -1039,6 +1073,7 @@
 
     {#if visible.length === 0}
       <p class="empty">Nichts in dieser Ansicht.</p>
+    {/if}
     {/if}
 
     {#if live && result?.duplicates?.length}
@@ -1056,16 +1091,6 @@
       <a href="/haftungsausschluss/">Haftungsausschluss</a>
     </p>
   </section>
-
-  <!-- BELEGE WITHOUT A BOOKING — the counterpart to the Fehlend list -->
-  {#if live && result?.extras?.length}
-    <ExtrasPanel
-      extras={result.extras}
-      missingCount={summary.missing}
-      missingSum={summary.sum.missing}
-      onopen={openInvoicePdf}
-    />
-  {/if}
 
   <!-- AUTO-RENAME -->
   {#if result && result.renames.length > 0}
@@ -1193,11 +1218,13 @@
   .report-head {
     display: flex;
     align-items: flex-end;
-    justify-content: space-between;
-    gap: 16px;
+    gap: 12px 16px;
     flex-wrap: wrap;
     margin-bottom: 18px;
   }
+  /* Sorting and exporting are about the table as a whole; the filter tiles below are
+     about which rows. Keeping them on separate lines stops the strip from wrapping. */
+  .report-head .sort-control { margin-left: auto; }
   .report-title h2 {
     font-size: var(--type-section-title-size);
     font-weight: var(--type-section-title-weight);

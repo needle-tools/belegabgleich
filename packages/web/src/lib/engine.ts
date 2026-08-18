@@ -352,28 +352,53 @@ export function removeDocument(prev: RunResult, rel: string): RunResult | null {
  * figure we misread, a credit applied) can never be linked automatically, however
  * obvious the pairing is to the person looking at both.
  */
-export function linkManually(prev: RunResult, entry: ReportEntry, rel: string): RunResult {
+export function linkManually(prev: RunResult, entry: ReportEntry, rels: string[]): RunResult {
   configureProviderAliases();
-  const charge = (prev.charges ?? []).find(
-    (c) => c.date === entry.date && Math.abs(c.amount - entry.amount) <= 0.01 && c.merchant === entry.merchant,
-  );
-  if (!charge) {
-    console.warn("[link] Buchung nicht mehr im Bericht gefunden — nichts verknüpft");
+  const charge = chargeOf(prev, entry);
+  const sources = prev.statementSources;
+  if (!charge || !sources || !rels.length) {
+    console.warn("[link] Buchung nicht gefunden (oder Sitzung ohne Auszug-Zuordnung) — nichts verknüpft");
     return prev;
   }
   const key = chargeKey(charge);
-  // One Beleg per booking, and one booking per Beleg: replace whatever either side
-  // was linked to before rather than stacking contradictory links.
+  // A booking may hold several Belege, but a Beleg belongs to one booking: drop any
+  // previous claim on these files, including an earlier "not these two".
   const links = [
-    ...(prev.manualLinks ?? []).filter((l) => l.charge !== key && l.rel !== rel),
-    { charge: key, rel },
+    ...(prev.manualLinks ?? []).filter((l) => !rels.includes(l.rel)),
+    ...rels.map((rel) => ({ charge: key, rel, mode: "link" as const })),
   ];
+  return fromSources(sources, prev.invoices ?? [], prev.emptyPdfs ?? [], links);
+}
+
+/**
+ * Release a booking's Belege, and remember that these pairs are NOT to be re-made.
+ *
+ * The remembering is the whole thing. Without it, releasing an automatic match lasts
+ * until the next re-match, which derives it again from the same equal totals — the
+ * user clicks, watches nothing happen, and concludes the button is broken.
+ */
+export function unmatchEntry(prev: RunResult, entry: ReportEntry): RunResult {
+  configureProviderAliases();
+  const charge = chargeOf(prev, entry);
   const sources = prev.statementSources;
-  if (!sources) {
-    console.warn("[link] Sitzung ohne Auszug-Zuordnung — manuelles Verknüpfen nicht möglich");
+  const rels = (entry.invoice ?? "").split(", ").filter(Boolean);
+  if (!charge || !sources || !rels.length) {
+    console.warn("[link] Zuordnung nicht gefunden — nichts aufgehoben");
     return prev;
   }
+  const key = chargeKey(charge);
+  const links = [
+    ...(prev.manualLinks ?? []).filter((l) => !(l.charge === key && rels.includes(l.rel))),
+    ...rels.map((rel) => ({ charge: key, rel, mode: "reject" as const })),
+  ];
   return fromSources(sources, prev.invoices ?? [], prev.emptyPdfs ?? [], links);
+}
+
+/** The charge a report row stands for, by value (date, amount, raw descriptor). */
+function chargeOf(prev: RunResult, entry: ReportEntry): Charge | undefined {
+  return (prev.charges ?? []).find(
+    (c) => c.date === entry.date && Math.abs(c.amount - entry.amount) <= 0.01 && c.merchant === entry.merchant,
+  );
 }
 
 /**

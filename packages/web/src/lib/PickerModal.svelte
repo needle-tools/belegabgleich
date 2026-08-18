@@ -95,7 +95,7 @@
   let undone = $state<null | "done" | "failed">(null);
   let undoing = $state(false);
   /** Either job blocks the dropzone; they say different things while they run. */
-  const working = $derived(busy || undoing);
+  const working = $derived(busy || undoing || linking);
 
   async function undo() {
     if (!onundo || working) return;
@@ -134,19 +134,43 @@
     const hits = [...next.values()].filter((v) => v !== null).length;
     feedback = hits > 0 ? { kind: "matched", invoice: next.get(keyOf(lead, entries.indexOf(lead))) ?? "" } : { kind: "nomatch" };
   }
-  /** Assign one of the unclaimed Belege to this booking by hand. */
-  let linking = $state("");
-  async function link(rel: string) {
-    if (!onlink || working || linking) return;
-    linking = rel;
-    const res = await onlink(lead, rel);
-    linking = "";
+  // ---- assigning unclaimed Belege by hand -----------------------------------
+  // Several at a time: one charge is often paid by two invoices, and picking them one
+  // by one means re-reading the same list twice. Nothing is applied until it's
+  // confirmed — this writes a decision into the report that outlives every re-match,
+  // so it should not happen on a stray click.
+  let picked = $state<string[]>([]);
+  let confirming = $state(false);
+  let linking = $state(false);
+  const toggle = (rel: string) =>
+    (picked = picked.includes(rel) ? picked.filter((r) => r !== rel) : [...picked, rel]);
+
+  const amountOf = (o: ExtraInvoice) => {
+    const n = parseFloat(o.total);
+    return isFinite(n) ? n : 0;
+  };
+  const pickedSum = $derived(
+    orphans.filter((o) => picked.includes(o.rel)).reduce((n, o) => n + amountOf(o), 0),
+  );
+  /** How the selection compares to the booking — the reason to show a sum at all. */
+  const delta = $derived(Math.round((pickedSum - lead.amount) * 100) / 100);
+
+  async function applyPicked() {
+    if (!onlink || working || linking || !picked.length) return;
+    linking = true;
+    const res = await onlink(lead, picked);
+    linking = false;
+    confirming = false;
     if (!res) { feedback = { kind: "error" }; return; }
     const next = new Map<string, string | null>();
     entries.forEach((e, i) => next.set(keyOf(e, i), assignedInvoice(res, e)));
     covered = next;
-    feedback = { kind: "manual", invoice: rel };
+    feedback = { kind: "manual", invoice: picked.join(", ") };
+    picked = [];
   }
+
+  /** File names of the last hand-drawn assignment, for its confirmation message. */
+  const linkedNames = $derived((feedback?.invoice ?? "").split(", ").filter(Boolean).map(baseName));
 
   /** How many of the bookings in this dialog are covered now. */
   const coveredCount = $derived(
@@ -365,7 +389,8 @@
           <div>
             <strong>Von dir zugeordnet.</strong>
             <span class="fb-sub">
-              {baseName(feedback.invoice ?? "")} gehört jetzt zu dieser Buchung — im
+              {linkedNames.join(", ")}
+              {linkedNames.length === 1 ? "gehört" : "gehören"} jetzt zu dieser Buchung — im
               Bericht als „manuell" gekennzeichnet, und die Zuordnung bleibt auch nach
               einem Neuladen bestehen.
             </span>
@@ -407,23 +432,38 @@
       <!-- The way out when the matcher can't see it. It links on the amount, so a
            Beleg whose PDF states a different total — partial payment, credit applied,
            a figure we read wrong — will never match on its own, however obvious the
-           pairing is to you. -->
+           pairing is to you. Several can belong to one booking, so this is a
+           selection, and nothing is written until it's confirmed. -->
       <section class="orphans">
         <h3>Beleg liegt schon da, passt aber nicht automatisch?</h3>
         <p>
-          Diese Belege im Ordner gehören zu keiner Buchung. Wenn einer zu
-          {money(lead.amount, lead.currency)} vom {dDate(lead.date)} gehört, ordne ihn
-          von Hand zu — deine Zuordnung bleibt bestehen, auch nach einem Neuladen.
+          Diese Belege im Ordner gehören zu keiner Buchung. Wähle aus, was zu
+          {money(lead.amount, lead.currency)} vom {dDate(lead.date)} gehört.
         </p>
         <ul>
-          {#each orphans as o (o.rel)}
-            <li>
-              <span class="orphan-doc">
-                {o.provider === "Unknown" ? "Anbieter unklar" : o.provider} ·
-                {o.date ? dDate(o.date) : "ohne Datum"} ·
-                {isFinite(parseFloat(o.total)) ? money(parseFloat(o.total), o.currency || "EUR") : "Betrag unklar"}
-              </span>
-              <!-- "Is this the right one?" is only answerable by looking at it. -->
+          {#each orphans as o, i (o.rel)}
+            {@const on = picked.includes(o.rel)}
+            <li class:on>
+              <input
+                id={`orphan-${i}`}
+                type="checkbox"
+                checked={on}
+                disabled={working}
+                onchange={() => toggle(o.rel)}
+              />
+              <label for={`orphan-${i}`} class="orphan-doc">
+                <!-- An unrecognized issuer is a missing fact, not a name: it says so
+                     quietly rather than shouting a label in the vendor's place. -->
+                {#if o.provider && o.provider !== "Unknown"}
+                  <span class="orphan-name">{o.provider}</span>
+                {:else}
+                  <span class="orphan-name unknown">Anbieter nicht erkannt</span>
+                {/if}
+                <span class="orphan-meta">
+                  {o.date ? dDate(o.date) : "ohne Datum"} ·
+                  {isFinite(parseFloat(o.total)) ? money(parseFloat(o.total), o.currency || "EUR") : "Betrag unklar"}
+                </span>
+              </label>
               {#if onopenpdf}
                 <button
                   type="button"
@@ -436,12 +476,56 @@
               {:else}
                 <span class="orphan-file" use:tooltip={o.rel}>{baseName(o.rel)}</span>
               {/if}
-              <button type="button" class="ghost small" disabled={!!linking || working} onclick={() => link(o.rel)}>
-                {linking === o.rel ? "Wird zugeordnet …" : "Zuordnen"}
-              </button>
             </li>
           {/each}
         </ul>
+
+        <div class="orphan-foot">
+          <!-- Two lines in every state: growing the footer when the first box is
+               ticked would shove the buttons (and the dialog) around under the cursor. -->
+          <span class="orphan-sum">
+            <strong>
+              {picked.length
+                ? `${picked.length} ausgewählt · ${money(pickedSum, "EUR")}`
+                : "Nichts ausgewählt"}
+            </strong>
+            {#if confirming}
+              <span class="orphan-confirm">
+                {picked.length === 1 ? "Diesen Beleg" : `Diese ${picked.length} Belege`} fest zuordnen?
+              </span>
+            {:else if picked.length}
+              <!-- The comparison is the point of the sum: two Belege that add up to
+                   the booking are a different thing from two that don't. -->
+              <span class="orphan-delta" data-off={delta !== 0}>
+                {delta === 0
+                  ? "stimmt genau mit der Buchung überein"
+                  : delta < 0
+                    ? `${money(Math.abs(delta), "EUR")} unter der Buchung`
+                    : `${money(delta, "EUR")} über der Buchung`}
+              </span>
+            {:else}
+              <span class="orphan-hint">Mehrere möglich — die Summe wird mit der Buchung verglichen.</span>
+            {/if}
+          </span>
+
+          {#if confirming}
+            <button type="button" class="ghost small" disabled={working} onclick={() => (confirming = false)}>
+              Abbrechen
+            </button>
+            <button type="button" class="primary small" disabled={working} onclick={applyPicked}>
+              {linking ? "Wird zugeordnet …" : "Bestätigen"}
+            </button>
+          {:else}
+            <button
+              type="button"
+              class="ghost small"
+              disabled={!picked.length || working}
+              onclick={() => (confirming = true)}
+            >
+              Zuordnen
+            </button>
+          {/if}
+        </div>
       </section>
     {/if}
 
@@ -724,44 +808,97 @@
   .ghost.danger:hover { border-color: #a23a2a; }
   .ghost.danger:disabled { opacity: 0.5; cursor: default; }
 
-  /* The manual-assignment list: a genuine escape hatch, so it looks like part of
-     the dialog rather than an error state. */
+  /* The manual-assignment list: a genuine escape hatch, so it looks like part of the
+     dialog rather than an error state. Checkbox | document | filename, with the
+     filename on its own line — the previous single row crammed all three plus a
+     button into one line and truncated the only part that identifies the file. */
   .orphans { margin-top: 14px; }
   .orphans h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 4px; }
   .orphans > p { margin: 0 0 8px; color: var(--text-secondary); font-size: 0.84rem; text-wrap: pretty; }
   .orphans ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   .orphans li {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) max-content;
-    align-items: center;
-    gap: 4px 10px;
-    padding: 8px 10px;
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: baseline;
+    gap: 2px 10px;
+    padding: 8px 12px;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-control);
     background: var(--surface-page);
+    transition: background-color 0.14s ease, border-color 0.14s ease;
   }
-  .orphan-doc { font-size: 0.85rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .orphans li.on {
+    background: var(--surface-callout-success);
+    border-color: color-mix(in srgb, var(--accent-brand) 45%, transparent);
+  }
+  .orphans input[type="checkbox"] {
+    grid-row: 1 / span 2;
+    align-self: center;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--accent-brand-deep);
+    cursor: pointer;
+  }
+  .orphan-doc {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    min-width: 0;
+    cursor: pointer;
+  }
+  .orphan-name { font-size: 0.86rem; font-weight: 700; overflow-wrap: anywhere; }
+  .orphan-meta { font-size: 0.82rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .orphan-name.unknown { font-weight: 500; font-style: italic; color: var(--text-muted); }
   .orphan-file {
-    grid-column: 1;
+    grid-column: 2;
+    justify-self: start;
     max-width: 100%;
     padding: 0;
     border: 0;
     background: none;
     font: inherit;
+    font-size: 0.74rem;
     color: var(--text-muted);
-    font-size: 0.76rem;
     text-align: left;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .orphan-file.link { cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
-  .orphan-file.link:hover { color: var(--accent-brand-deep); }
-  .orphans button {
-    grid-column: 2;
-    grid-row: 1 / span 2;
+  /* Only the filename itself opens the PDF — stretched across the row it was a
+     surprise click target that also fought the checkbox for the row. */
+  .orphan-file.link {
+    width: max-content;
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
-  .ghost.small { min-height: 32px; padding: 0 12px; font-size: 0.82rem; }
+  .orphan-file.link:hover { color: var(--accent-brand-deep); }
+
+  .orphan-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+  .orphan-sum {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-right: auto;
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .orphan-sum strong { display: block; color: var(--text-primary); }
+  .orphan-delta { color: var(--text-success); font-size: 0.78rem; }
+  .orphan-delta[data-off="true"] { color: #9a5b1a; }
+  .orphan-hint { color: var(--text-muted); }
+  .orphan-confirm { font-size: 0.82rem; font-weight: 650; color: var(--text-primary); }
+  .ghost.small, .primary.small { min-height: 32px; padding: 0 12px; font-size: 0.82rem; }
 
   .modal-foot { display: flex; justify-content: flex-end; margin-top: 18px; }
 

@@ -28,8 +28,11 @@ export type FilingResult = {
   written: { path: string; rel: string; root: FsDirHandle }[];
   /** Paths that were already in the folder — the same document, not written again. */
   existing: string[];
-  /** True when write access was refused — nothing was written, matching still runs. */
+  /** True when write access was refused for at least one folder. */
   denied: boolean;
+  /** The folders that refused, by label — so the user can be asked again for exactly
+   *  those instead of being told "something wasn't saved". */
+  deniedTargets: string[];
 };
 
 const baseName = (rel: string) => rel.split(/[/\\]|\s›\s/).pop() ?? rel;
@@ -91,13 +94,21 @@ export async function fileIntoFolder(plans: FilingPlan[]): Promise<FilingResult>
   const out: CollectedPdf[] = [];
   const written: FilingResult["written"] = [];
   const existing: string[] = [];
-  let denied = false;
-  // One permission prompt per root, however many files are in the drop.
-  const grants = new Map<FsDirHandle, boolean>();
+  const deniedTargets = new Set<string>();
+  // One permission prompt per root, however many files are in the drop. Keyed by
+  // NAME as well as identity: two handles can point at the same directory (one from
+  // the folder walk, one restored from the session), and asking twice for the same
+  // folder means the second ask arrives without a user gesture — which Chrome
+  // refuses out of hand.
+  const grants = new Map<string, boolean>();
+  const grantKey = (root: FsDirHandle) => root.name || "«root»";
 
   for (const { pdf, target, hint } of plans) {
     if (!target) {
-      console.info(`[filing] kein Zielordner für „${pdf.rel}" — der Beleg bleibt nur im Bericht`);
+      // No target is a legitimate answer: a Beleg that matched no booking has no
+      // folder it demonstrably belongs in, and filing it next to whatever booking
+      // happened to be on screen is how invoices end up in the wrong month.
+      console.info(`[filing] kein sicherer Zielordner für „${pdf.rel}" — der Beleg bleibt, wo er ist`);
       out.push(pdf);
       continue;
     }
@@ -106,10 +117,14 @@ export async function fileIntoFolder(plans: FilingPlan[]): Promise<FilingResult>
       out.push(pdf);
       continue;
     }
-    if (!grants.has(target.root)) grants.set(target.root, await ensureWritable(target.root));
-    if (!grants.get(target.root)) {
-      console.info(`[filing] Schreibzugriff auf „${target.label}" nicht erteilt`);
-      denied = true;
+    const key = grantKey(target.root);
+    if (!grants.has(key)) grants.set(key, await ensureWritable(target.root));
+    if (!grants.get(key)) {
+      // Not an error and not the end of it: the file stays where it is, keeps its
+      // place in the report, and the caller offers the write again on a click — which
+      // carries the activation this attempt was missing.
+      console.info(`[filing] Schreibzugriff auf „${target.label}" nicht erteilt — ${pdf.rel} bleibt liegen`);
+      deniedTargets.add(target.label);
       out.push(pdf);
       continue;
     }
@@ -132,5 +147,12 @@ export async function fileIntoFolder(plans: FilingPlan[]): Promise<FilingResult>
       out.push(pdf); // writing failed for this one — keep matching it from memory
     }
   }
-  return { pdfs: out, saved: written.map((w) => w.path), written, existing, denied };
+  return {
+    pdfs: out,
+    saved: written.map((w) => w.path),
+    written,
+    existing,
+    denied: deniedTargets.size > 0,
+    deniedTargets: [...deniedTargets],
+  };
 }

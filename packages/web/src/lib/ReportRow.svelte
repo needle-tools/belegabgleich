@@ -10,6 +10,7 @@
     sourceNames,
     justMatched,
     onpick,
+    onunmatch,
   }: {
     entry: ReportEntry;
     index?: number;
@@ -21,6 +22,8 @@
     /** Row keys that were matched a moment ago and are on their way out. */
     justMatched?: Set<string>;
     onpick?: (e: ReportEntry) => void;
+    /** Release this booking's Beleg again — the way back out of a wrong match. */
+    onunmatch?: (e: ReportEntry) => void;
   } = $props();
   /** This row was just given its Beleg: say so, hold, then leave. */
   const fresh = $derived(entry.status === "matched" && !!justMatched?.has(rowKey(entry)));
@@ -132,7 +135,19 @@
   </div>
 
   <div class="c-action">
-    {#if entry.status === "missing"}
+    {#if entry.status === "matched" && onunmatch && !fresh}
+      <!-- Every match is a guess (ours or yours), so every match needs a way back.
+           Quiet: releasing is rare next to the work of finding Belege. -->
+      <button
+        type="button"
+        class="action release"
+        onclick={() => onunmatch?.(entry)}
+        use:tooltip={`Zuordnung aufheben — „${(entry.invoice ?? "der Beleg").split(", ")[0]}" gilt dann wieder als nicht zugeordnet, und diese Buchung wieder als offen`}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+        Aufheben
+      </button>
+    {:else if entry.status === "missing"}
       <button
         type="button"
         class="action"
@@ -242,8 +257,10 @@
 
   /* col 4 — status */
   .c-status { justify-self: start; }
-  /* col 5 — action */
-  .c-action { justify-self: end; }
+  /* col 5 — action. The buttons fill the column instead of hugging their text:
+     "Beleg holen" and "Belege holen" differ by four pixels of glyph, and a column of
+     buttons whose left edges wobble by four pixels looks broken. */
+  .c-action { justify-self: stretch; }
 
   .tag {
     display: inline-flex;
@@ -284,8 +301,10 @@
   .tag.neutral { color: var(--text-muted); background: var(--surface-panel-muted); }
 
   .action {
-    display: inline-flex;
+    display: flex;
+    width: 100%;
     align-items: center;
+    justify-content: center;
     gap: 5px;
     min-height: 28px;
     padding: 0 11px;
@@ -304,6 +323,15 @@
   .action svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .action:hover { background: var(--text-success); }
   .action:active { scale: 0.96; }
+  /* Not a call to action — an exit. Reads as text until you're on the row. */
+  .action.release {
+    background: transparent;
+    color: var(--text-muted);
+    font-weight: 650;
+  }
+  .row:hover .action.release { color: var(--status-warn-text); background: var(--status-warn-surface); }
+  .action.release:hover { color: var(--status-warn-text); background: var(--status-warn-surface); }
+  .action.release svg { width: 11px; height: 11px; }
   .action.muted {
     color: var(--text-muted);
     background: var(--surface-panel-muted);

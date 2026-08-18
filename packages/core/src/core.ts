@@ -365,19 +365,31 @@ function stripAddress(s: string): string {
   return s.replace(STREET_RX, "").replace(ZIP_CITY_RX, "").trim();
 }
 
+/** The part of a header fragment BEFORE its first meta/bill-to keyword. Layouts put
+ *  the issuer and the "Bill to" label in one line with a single space between them
+ *  ("Needle Tools GmbH Bill to"), which is not a column break — so the whole line got
+ *  thrown away along with the only name on the page. */
+function beforeLabel(s: string): string {
+  const at = s.search(HEADER_SKIP);
+  return at > 0 ? s.slice(0, at).trim() : "";
+}
+
 function guessProviderFromHeader(lines: string[], customer: string): string {
   const cust = customer ? canon(customer).toLowerCase() : "";
   for (const raw of lines.slice(0, 14)) {
     // Scan every whitespace-separated column, not just the first: the issuer name
     // can sit beside or right after the bill-to address on the same line.
     for (const col of raw.trim().split(/\s{2,}/)) {
-      const name = stripAddress(col.trim()) || col.trim();     // peel a leading address ("…-Str. 7 Acme GmbH" → "Acme GmbH")
-      if (name.length < 3 || name.length > 50) continue;
-      if (!COMPANY_HINT.test(name)) continue;                  // require a legal-entity signal
-      if (/@|https?:|www\./i.test(name)) continue;             // email / url line
-      if (HEADER_SKIP.test(name)) continue;                    // title / bill-to / meta line
-      if (cust && canon(name).toLowerCase() === cust) continue; // the recipient, not the issuer
-      return name;
+      for (const part of [col.trim(), beforeLabel(col.trim())]) {
+        if (!part) continue;
+        const name = stripAddress(part) || part;                  // peel a leading address ("…-Str. 7 Acme GmbH" → "Acme GmbH")
+        if (name.length < 3 || name.length > 50) continue;
+        if (!COMPANY_HINT.test(name)) continue;                  // require a legal-entity signal
+        if (/@|https?:|www\./i.test(name)) continue;             // email / url line
+        if (HEADER_SKIP.test(name)) continue;                    // title / bill-to / meta line
+        if (cust && canon(name).toLowerCase() === cust) continue; // the recipient, not the issuer
+        return name;
+      }
     }
   }
   return "";
@@ -572,15 +584,21 @@ export type MatchResult = {
 };
 
 /**
- * A link the user drew by hand: this Beleg belongs to this booking, whatever the
+ * A decision the user made about one (booking, Beleg) pair, overriding whatever the
  * automatic reading thinks. Stored by value rather than by object identity, because
  * it has to survive a session reload and every later re-match.
+ *
+ * `reject` is what makes "Zuordnung aufheben" mean anything: without it, releasing an
+ * automatic match would last exactly until the next re-match, which re-derives it
+ * from the same equal totals and puts it straight back.
  */
 export type ManualLink = {
   /** {@link chargeKey} of the booking. */
   charge: string;
   /** display path of the invoice. */
   rel: string;
+  /** "link" (default) ties them together; "reject" keeps them apart. */
+  mode?: "link" | "reject";
 };
 
 /**
@@ -695,21 +713,34 @@ export function matchStatement(charges: Charge[], rows: Row[], links: readonly M
   const pending: Charge[] = [];
   const chargeUsed = new Set<number>();
 
-  // Pass 0 — links the user drew by hand. They outrank every automatic reading,
+  // Pass 0 — decisions the user made by hand. They outrank every automatic reading,
   // because they exist precisely for the readings that come out wrong: a total the
   // PDF prints in a form we misread, a Beleg a week and a half off its booking, a
   // vendor whose name appears nowhere in the statement text.
+  //
+  // A booking may carry several hand-picked Belege (one Amazon charge, two invoices),
+  // so links are collected per booking before anything is consumed.
+  const rejected = new Set(
+    links.filter((l) => l.mode === "reject").map((l) => `${l.charge}|${l.rel}`),
+  );
+  const keys = charges.map(chargeKey);
+  const rejects = (ci: number, ri: number) => rejected.has(`${keys[ci]}|${rows[ri].rel}`);
+
   if (links.length) {
     const rowByRel = new Map(rows.map((r, i) => [r.rel, i]));
-    const keys = charges.map(chargeKey);
+    const wanted = new Map<number, number[]>(); // charge index → row indices
     for (const link of links) {
+      if (link.mode === "reject") continue;
       const ri = rowByRel.get(link.rel);
       if (ri === undefined || consumed.has(ri)) continue;
       const ci = keys.findIndex((k, i) => k === link.charge && !chargeUsed.has(i));
       if (ci < 0) continue;
+      consumed.add(ri); // claimed, whichever booking ends up holding it
+      wanted.set(ci, [...(wanted.get(ci) ?? []), ri]);
+    }
+    for (const [ci, ris] of wanted) {
       chargeUsed.add(ci);
-      consumed.add(ri);
-      matched.push({ charge: charges[ci], rows: [rows[ri]], manual: true });
+      matched.push({ charge: charges[ci], rows: ris.map((ri) => rows[ri]), manual: true });
     }
   }
 
@@ -729,6 +760,7 @@ export function matchStatement(charges: Charge[], rows: Row[], links: readonly M
         Math.abs(t.value - charge.amount) <= 0.01
         || (charge.bookedEur != null && Math.abs(t.value - charge.bookedEur) <= 0.01));
       if (!hit) return;
+      if (rejects(ci, ri)) return; // the user has already said: not these two
       const prov = merchantProviderScore(charge.merchant, r.provider);
       // A carried balance is a secondary figure on the page, so it brings more
       // false-match surface than a total does. Require the vendor to line up.
@@ -755,7 +787,8 @@ export function matchStatement(charges: Charge[], rows: Row[], links: readonly M
   let stillMissing: Charge[] = [];
   for (const charge of pending) {
     const provider = canon(charge.merchant);
-    const cand = rows.map((r, i) => i).filter(i => !consumed.has(i) && rows[i].provider === provider && isFinite(parseFloat(rows[i].total)));
+    const ci = keys.indexOf(chargeKey(charge));
+    const cand = rows.map((r, i) => i).filter(i => !consumed.has(i) && rows[i].provider === provider && isFinite(parseFloat(rows[i].total)) && !(ci >= 0 && rejects(ci, i)));
     let combo: number[] | null = null;
     if (cand.length >= 2) {
       const vals = cand.map(i => parseFloat(rows[i].total));
@@ -781,7 +814,10 @@ export function matchStatement(charges: Charge[], rows: Row[], links: readonly M
     const inv = rows[ri];
     const total = parseFloat(inv.total);
     if (!isFinite(total) || inv.provider === "Unknown") continue;
-    const candK = stillMissing.map((c, k) => k).filter(k => canon(stillMissing[k].merchant) === inv.provider);
+    const candK = stillMissing
+      .map((c, k) => k)
+      .filter((k) => canon(stillMissing[k].merchant) === inv.provider)
+      .filter((k) => !rejected.has(`${chargeKey(stillMissing[k])}|${inv.rel}`));
     if (candK.length < 2) continue;
     let combo: number[] | null = null;
     for (const valOf of [(c: Charge) => c.amount, (c: Charge) => c.bookedEur ?? c.amount]) {
@@ -810,6 +846,7 @@ export function matchStatement(charges: Charge[], rows: Row[], links: readonly M
       const total = parseFloat(r.total);
       if (!isFinite(total) || total <= 0) return;
       const cur = (r.currency || "").toUpperCase();
+      if (rejected.has(`${chargeKey(charge)}|${r.rel}`)) return;
       if (!cur || cur === "EUR" || cur === chargeCur) return; // same currency → pass 1 already had its chance
       const prov = merchantProviderScore(charge.merchant, r.provider);
       if (prov <= 0) return;                                  // never guess across vendors

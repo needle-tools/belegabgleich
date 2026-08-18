@@ -11,6 +11,7 @@
     justMatched,
     onpick,
     onpickgroup,
+    onunmatch,
   }: {
     group: EntryGroup;
     index?: number;
@@ -25,6 +26,8 @@
     onpick?: (e: ReportEntry) => void;
     /** Opens the assign dialog for the whole group: one vendor trip, all invoices. */
     onpickgroup?: (g: EntryGroup) => void;
+    /** Release a booking's Beleg again. Reaches the child rows too. */
+    onunmatch?: (e: ReportEntry) => void;
   } = $props();
 
   let open = $state(false);
@@ -123,7 +126,19 @@
   </div>
 
   <div class="c-action">
-    {#if group.status !== "matched"}
+    {#if group.status === "matched" && onunmatch && !fresh}
+      <!-- One invoice covering several bookings is released as a whole; that's how it
+           was matched. -->
+      <button
+        type="button"
+        class="action release"
+        onclick={() => group.items.forEach((i) => onunmatch?.(i))}
+        use:tooltip={`Zuordnung für alle ${group.items.length} Buchungen aufheben`}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+        Aufheben
+      </button>
+    {:else if group.status !== "matched"}
       <!-- One trip to the vendor covers every booking in the group, and one dialog
            takes all of the invoices you come back with — including the vendor link
            itself, so there's no reason to leave the group to fetch them. -->
@@ -147,7 +162,7 @@
        differ only by transaction id, which dedupeCharges keeps them apart by), so
        provider+date+amount is not unique — the index is what separates them. -->
   {#each group.items as item, i (item.provider + item.date + item.amount + "#" + i)}
-    <ReportRow entry={item} child {showSource} {sourceNames} {justMatched} {onpick} />
+    <ReportRow entry={item} child {showSource} {sourceNames} {justMatched} {onpick} {onunmatch} />
   {/each}
 {/if}
 
@@ -224,7 +239,10 @@
     white-space: nowrap;
   }
   .c-status { justify-self: start; }
-  .c-action { justify-self: end; }
+  /* The buttons fill the column instead of hugging their text: "Beleg holen" and
+     "Belege holen" differ by a few pixels of glyph, and a column of buttons whose
+     edges wobble by a few pixels looks broken. */
+  .c-action { justify-self: stretch; }
 
   .tag {
     display: inline-flex;
@@ -246,8 +264,10 @@
   .tag.warn { color: var(--status-warn-text); background: var(--status-warn-surface); border-color: var(--status-warn-border); }
 
   .action {
-    display: inline-flex;
+    display: flex;
+    width: 100%;
     align-items: center;
+    justify-content: center;
     gap: 5px;
     min-height: 28px;
     padding: 0 11px;
@@ -263,6 +283,10 @@
   /* The same affordance is an <a> (vendor page) or a <button> (expand), so the
      button needs the element defaults stripped to match. */
   button.action { border: none; cursor: pointer; font-family: var(--font-family-body); }
+  /* An exit, not a call to action — same treatment as on a single row. */
+  .action.release { background: transparent; color: var(--text-muted); font-weight: 650; }
+  .action.release:hover { color: var(--status-warn-text); background: var(--status-warn-surface); }
+  .action.release svg { width: 11px; height: 11px; }
   .action svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .action:hover { background: var(--text-success); }
   .action:active { scale: 0.96; }
