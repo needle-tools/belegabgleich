@@ -376,6 +376,31 @@ export function linkManually(prev: RunResult, entry: ReportEntry, rel: string): 
   return fromSources(sources, prev.invoices ?? [], prev.emptyPdfs ?? [], links);
 }
 
+/**
+ * Point the report at Belege that have just been moved into the folder.
+ *
+ * Dropping invoices straight onto the page matches them but leaves the files in the
+ * Downloads folder; filing them afterwards has to update the rows in place, not add
+ * a second copy of each. Hand-drawn links move with their file, or the user's
+ * decision would quietly detach.
+ */
+export function repointResult(prev: RunResult, moves: readonly { from: string; to: CollectedPdf }[]): RunResult {
+  configureProviderAliases();
+  if (!moves.length) return prev;
+  const byFrom = new Map(moves.map((m) => [m.from, m.to]));
+  const invoices = (prev.invoices ?? []).map((i) => {
+    const to = byFrom.get(i.row.rel);
+    return to ? repointInvoice(i, to) : i;
+  });
+  const links = (prev.manualLinks ?? []).map((l) => {
+    const to = byFrom.get(l.rel);
+    return to ? { ...l, rel: to.rel } : l;
+  });
+  const sources = prev.statementSources;
+  if (!sources) return prev;
+  return fromSources(sources, invoices, prev.emptyPdfs ?? [], links);
+}
+
 /** Take back a hand-drawn link (by the Beleg it points at). */
 export function unlinkManually(prev: RunResult, rel: string): RunResult {
   configureProviderAliases();

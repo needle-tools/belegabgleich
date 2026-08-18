@@ -6,7 +6,9 @@
  * rebuilds everything else, so that is exactly the surface worth pinning down.
  */
 import { expect, test } from "bun:test";
-import { removeDocument, type RunResult } from "./engine";
+import { chargeKey } from "@kah/core";
+import { linkManually, removeDocument, repointResult, type RunResult } from "./engine";
+import type { CollectedPdf } from "./collect";
 
 const charge = (merchant: string, date: string, amount: number) => ({
   merchant,
@@ -88,6 +90,44 @@ test("removing an invoice releases the booking it covered", () => {
   const after = removeDocument(withInvoice, "hetzner.pdf")!;
   expect(after.invoiceCount).toBe(0);
   expect(after.entries.find((e) => e.merchant === "HETZNER")?.status).toBe("missing");
+});
+
+test("filing a dropped Beleg moves its row instead of adding a second one", () => {
+  const dropped = base();
+  dropped.invoices = [invoice("Hetzner", "2026-03-14", "12.90", "Rechnung.pdf")];
+  const filed: CollectedPdf = {
+    rel: "Belege/03/Hetzner-2026-03-14.pdf",
+    src: { kind: "file", path: "Belege/03/Hetzner-2026-03-14.pdf" },
+    data: new ArrayBuffer(0),
+  };
+
+  const r = repointResult(dropped, [{ from: "Rechnung.pdf", to: filed }]);
+  expect(r.invoiceCount).toBe(1); // moved, not duplicated
+  expect(r.invoices[0].row.rel).toBe("Belege/03/Hetzner-2026-03-14.pdf");
+  expect(r.entries.find((e) => e.merchant === "HETZNER")?.invoice).toBe("Belege/03/Hetzner-2026-03-14.pdf");
+});
+
+test("a hand-drawn link follows its Beleg into the folder", () => {
+  const dropped = base();
+  // A Beleg whose total nothing on the statement equals: only a manual link holds it.
+  dropped.invoices = [invoice("Hetzner", "2026-03-14", "99.00", "Rechnung.pdf")];
+  const entry = { ...dropped.entries[0], provider: "Hetzner", date: "2026-03-14", amount: 12.9, merchant: "HETZNER" };
+  const linked = linkManually(
+    { ...dropped, charges: [charge("HETZNER", "2026-03-14", 12.9)] } as RunResult,
+    entry as never,
+    "Rechnung.pdf",
+  );
+  expect(linked.entries.find((e) => e.merchant === "HETZNER")?.manual).toBe(true);
+  expect(linked.manualLinks[0].charge).toBe(chargeKey(charge("HETZNER", "2026-03-14", 12.9)));
+
+  const filed: CollectedPdf = {
+    rel: "Belege/03/Hetzner-2026-03-14.pdf",
+    src: { kind: "file", path: "Belege/03/Hetzner-2026-03-14.pdf" },
+    data: new ArrayBuffer(0),
+  };
+  const moved = repointResult(linked, [{ from: "Rechnung.pdf", to: filed }]);
+  expect(moved.manualLinks[0].rel).toBe("Belege/03/Hetzner-2026-03-14.pdf");
+  expect(moved.entries.find((e) => e.merchant === "HETZNER")?.status).toBe("matched");
 });
 
 test("removing a text-less PDF drops it from the skipped list", () => {

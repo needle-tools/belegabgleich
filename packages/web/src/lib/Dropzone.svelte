@@ -21,6 +21,9 @@
     awaitingDemo = false,
     onremove,
     notice = "",
+    sortable = 0,
+    sortTargets = [],
+    onsort,
     locked = [],
     reconnecting = false,
     onreconnect,
@@ -28,6 +31,11 @@
     onload: (pdfs: CollectedPdf[]) => void;
     /** Transient status from the folder watcher ("2 neue Dateien ergänzt"). */
     notice?: string;
+    /** Matched Belege still lying in the download folder, waiting to be filed. */
+    sortable?: number;
+    /** The folders they would go into, for saying so before it happens. */
+    sortTargets?: string[];
+    onsort?: () => void;
     /** Folders remembered from a previous session, waiting for a re-grant click. */
     locked?: string[];
     reconnecting?: boolean;
@@ -239,6 +247,26 @@
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
           {notice}
         </p>
+      {/if}
+
+      {#if sortable > 0 && onsort}
+        <!-- The drop matched these, but they are still in Downloads. One click puts
+             each one beside the statement of the booking it settles — named to
+             match, and never all in the same month. -->
+        <div class="dz-sort">
+          <span>
+            <strong>{sortable}</strong>
+            {sortable === 1 ? "Beleg liegt" : "Belege liegen"} noch im Download-Ordner —
+            {#if sortTargets.length === 1}
+              gehört nach <strong>{sortTargets[0]}</strong>.
+            {:else}
+              verteilt auf {sortTargets.length} Ordner ({sortTargets.join(", ")}).
+            {/if}
+          </span>
+          <button type="button" class="dz-btn primary" disabled={working} onclick={() => onsort?.()}>
+            {sortable === 1 ? "Beleg einsortieren" : "Belege einsortieren"}
+          </button>
+        </div>
       {/if}
 
       <div class="dz-actions">
@@ -686,6 +714,25 @@
     font-size: 0.95rem;
   }
   .dz-found strong { color: var(--status-warn-text); font-variant-numeric: tabular-nums; }
+  /* The one write this panel offers, so it says what it will do and where. */
+  .dz-sort {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    padding: 10px 14px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-card);
+    background: var(--surface-panel);
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+    text-align: left;
+  }
+  .dz-sort strong { color: var(--text-primary); overflow-wrap: anywhere; }
+  .dz-sort .dz-btn { min-height: 36px; font-size: 0.86rem; }
+
   .dz-locked {
     display: flex;
     align-items: center;

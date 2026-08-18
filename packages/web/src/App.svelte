@@ -310,6 +310,71 @@
       .map((x) => x.o);
   });
 
+  /**
+   * Belege that are matched but still sitting wherever the browser downloaded them,
+   * with the folder each one belongs in.
+   *
+   * The described flow is "I download all the Hetzner invoices, drop them, and they
+   * should be sorted" — dropping onto the page matches them but files nothing, and
+   * silently writing into someone's folders on a drop is not ours to do. So the
+   * dropzone offers it as one click, which is also the gesture the permission prompt
+   * needs.
+   */
+  const pendingSort = $derived.by(() => {
+    if (!result) return [];
+    const plans: { pdf: CollectedPdf; target: FileTarget; hint?: NameHint }[] = [];
+    for (const inv of result.invoices) {
+      if (!inv.pdf?.data || inv.pdf.root) continue; // already lives in a picked folder
+      const entry = result.entries.find(
+        (e) => e.status === "matched" && (e.invoice ?? "").split(", ").includes(inv.row.rel),
+      );
+      const target = targetForStatement(entry?.source?.rel) ?? targetFor(entry);
+      if (!target) continue;
+      plans.push({
+        pdf: inv.pdf,
+        target,
+        hint: entry
+          ? { provider: entry.provider, date: entry.date, amount: entry.amount, currency: entry.currency }
+          : undefined,
+      });
+    }
+    return plans;
+  });
+  /** The distinct folders that click would write into — named, before it happens. */
+  const pendingSortLabels = $derived([...new Set(pendingSort.map((p) => p.target.label))].sort());
+
+  /** File those Belege into their folders and point the report at the new paths. */
+  async function sortIntoFolders() {
+    if (!result || !pendingSort.length) return;
+    busy = true;
+    try {
+      const plans = pendingSort.map((p) => ({ ...p }));
+      const filed = await fileIntoFolder(plans);
+      const moves = plans
+        .map((p, i) => ({ from: p.pdf.rel, to: filed.pdfs[i] }))
+        .filter((m) => m.to.rel !== m.from);
+      if (filed.written.length) undoable = { files: filed.written };
+      const { repointResult } = await import("./lib/engine");
+      result = repointResult(result, moves);
+      const moved = new Set(moves.map((m) => m.from));
+      sources = [...sources.filter((s) => !moved.has(s.rel)), ...filed.pdfs];
+      saveSession(result);
+      notify(
+        filed.saved.length
+          ? `${filed.saved.length} ${filed.saved.length === 1 ? "Beleg" : "Belege"} einsortiert`
+          : filed.denied
+            ? "Nicht einsortiert — der Schreibzugriff wurde abgelehnt"
+            : "Nichts einsortiert — die Belege lagen schon im Ordner",
+      );
+      track("belege_filed", { bucket: bucket(filed.saved.length) });
+    } catch (e) {
+      console.error("[filing] Einsortieren fehlgeschlagen:", e);
+      errorMsg = "Beim Einsortieren ist etwas schiefgelaufen (Details in der Browser-Konsole).";
+    } finally {
+      busy = false;
+    }
+  }
+
   /** Record "this Beleg belongs to this booking", whatever the matcher thinks. */
   async function onLinkManual(entry: ReportEntry, rel: string): Promise<RunResult | null> {
     if (!result) return null;
@@ -819,6 +884,9 @@
       {errorMsg}
       {awaitingDemo}
       notice={autoNotice}
+      sortable={pendingSort.length}
+      sortTargets={pendingSortLabels}
+      onsort={sortIntoFolders}
       locked={lockedFolders}
       {reconnecting}
       onreconnect={reconnectFolders}
