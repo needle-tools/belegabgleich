@@ -23,7 +23,7 @@
         { "label": "Workspace Admin", "url": "https://admin.google.com/ac/billing" }
       ] },
     { "name": "AWS", "aliases": ["amazon web services", "aws"], "invoiceUrl": "https://console.aws.amazon.com/billing/home#/bills" },
-    { "name": "Amazon", "aliases": ["amazon"], "invoiceUrl": "https://www.amazon.de/gp/css/order-history" },
+    { "name": "Amazon", "aliases": ["amazon"], "invoiceUrl": "https://www.amazon.de/your-orders/orders?timeFilter=year-{YYYY}" },
     { "name": "Microsoft", "aliases": ["microsoft", "msbill", "msft"], "invoiceUrl": "https://account.microsoft.com/billing/orders" },
     { "name": "Apple", "aliases": ["apple", "itunes"], "invoiceUrl": "https://reportaproblem.apple.com" },
     { "name": "Adobe", "aliases": ["adobe"], "invoiceUrl": "https://account.adobe.com/plans" },

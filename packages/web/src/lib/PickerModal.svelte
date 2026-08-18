@@ -51,7 +51,7 @@
     onundo?: () => Promise<boolean>;
   } = $props();
 
-  const portals = $derived(invoicePortalsFor(entry.provider));
+  const portals = $derived(invoicePortalsFor(entry.provider, entry.date));
   // Vendors that bill through several portals get one button each; with a single
   // portal the header keeps its plain "Quelle öffnen" shortcut.
   const url = $derived(portals.length === 1 ? portals[0].url : undefined);

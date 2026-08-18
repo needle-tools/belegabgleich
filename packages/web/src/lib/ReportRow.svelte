@@ -1,13 +1,31 @@
 <script lang="ts">
-  import { type ReportEntry, money, dDate, invoiceUrlFor } from "./report";
+  import { type ReportEntry, money, dDate, invoiceUrlFor, descriptorOf, sourceShort } from "./report";
   import { tooltip } from "./tooltip";
   let {
     entry,
     index = 0,
     child = false,
+    showSource = false,
+    sourceNames,
     onpick,
-  }: { entry: ReportEntry; index?: number; child?: boolean; onpick?: (e: ReportEntry) => void } = $props();
-  const url = $derived(entry.status === "missing" ? invoiceUrlFor(entry.provider) : undefined);
+  }: {
+    entry: ReportEntry;
+    index?: number;
+    child?: boolean;
+    /** Render the "Quelle" column — on only when several documents are loaded. */
+    showSource?: boolean;
+    /** rel → short, distinguishing name of that document. */
+    sourceNames?: Map<string, string>;
+    onpick?: (e: ReportEntry) => void;
+  } = $props();
+  const sourceName = $derived(
+    entry.source ? sourceNames?.get(entry.source.rel) || sourceShort(entry.source.rel) : "",
+  );
+  const url = $derived(entry.status === "missing" ? invoiceUrlFor(entry.provider, entry.date) : undefined);
+  // The raw statement line, right under the brand. Two Google Ads debits in the
+  // same month are otherwise the same row twice, and the number you'd search your
+  // mail for is only in here.
+  const descriptor = $derived(descriptorOf(entry));
   // With a Beleg in hand, the useful thing on hover is WHERE it is — its path
   // inside the picked folder. Without one, fall back to revealing a clipped name.
   const nameTip = $derived(
@@ -34,8 +52,25 @@
 <li class="row" class:child style={`--i:${index}`} data-status={entry.status}>
   <div class="c-name">
     <span class="dot" aria-hidden="true"></span>
-    <span class="provider" use:tooltip={nameTip}>{entry.provider}</span>
+    <span class="name-lines">
+      <span class="provider" use:tooltip={nameTip}>{entry.provider}</span>
+      {#if descriptor}
+        <span class="descriptor" use:tooltip={descriptor}>{descriptor}</span>
+      {/if}
+    </span>
   </div>
+
+  {#if showSource}
+    <span class="c-source">
+      {#if entry.source}
+        <span class="source-name" use:tooltip={`${entry.source.label} · ${entry.source.rel}`}>
+          {sourceName}
+        </span>
+      {:else}
+        <span class="source-name none" use:tooltip={"Für diese Buchung ist nicht hinterlegt, aus welchem Dokument sie stammt (Sitzung aus einer älteren Version)"}>—</span>
+      {/if}
+    </span>
+  {/if}
 
   <span class="c-date">{dDate(entry.date)}</span>
 
@@ -110,6 +145,28 @@
   }
   .row.child .c-name { padding-left: 22px; }
   .row.child .provider { font-weight: 600; }
+  .name-lines { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  /* The statement's own text: present, quiet, one line. */
+  .descriptor {
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    line-height: 1.25;
+    font-family: var(--font-family-code);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .c-source { min-width: 0; }
+  .source-name {
+    display: block;
+    max-width: 14ch;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .source-name.none { max-width: none; }
   .dot {
     width: 8px;
     height: 8px;
@@ -210,7 +267,8 @@
     }
     .c-name { grid-column: 1; grid-row: 1; }
     .c-amount { grid-column: 2; grid-row: 1; }
-    .c-date { grid-column: 1 / -1; grid-row: 2; }
+    .c-date { grid-column: 1; grid-row: 2; }
+    .c-source { grid-column: 2; grid-row: 2; justify-self: end; }
     .c-status { grid-column: 1; grid-row: 3; }
     .c-action { grid-column: 2; grid-row: 3; }
   }

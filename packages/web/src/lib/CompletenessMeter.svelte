@@ -5,7 +5,19 @@
   // of missing Belege. Both honour prefers-reduced-motion.
   import { onMount, untrack } from "svelte";
 
-  let { coverage = 0, matched = 0, total = 0 }: { coverage: number; matched: number; total: number } = $props();
+  let {
+    coverage = 0,
+    matched = 0,
+    total = 0,
+    compact = false,
+  }: {
+    coverage: number;
+    matched: number;
+    total: number;
+    /** Working state: the ring shrinks so the header it sits in can be one quiet
+     *  line rather than a landing-page hero. */
+    compact?: boolean;
+  } = $props();
 
   const R = 52;
   const C = 2 * Math.PI * R;
@@ -67,6 +79,7 @@
 
 <figure
   class="meter"
+  class:compact
   data-complete={missing === 0}
   data-state={state}
   aria-label={`${missing} von ${total} belegpflichtigen Buchungen ohne Beleg`}
@@ -151,6 +164,9 @@
     gap: 2px;
     text-align: center;
   }
+  .meter.compact { width: 148px; height: 148px; }
+  .meter.compact .count { font-size: 2.2rem; }
+  .meter.compact .ratio { display: none; }
   .count {
     font-family: var(--font-family-display);
     font-weight: 800;

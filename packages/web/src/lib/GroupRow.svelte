@@ -2,15 +2,21 @@
   import ReportRow from "./ReportRow.svelte";
   import { tooltip } from "./tooltip";
   import { openBeleg } from "./openBeleg";
-  import { money, invoiceUrlFor, type EntryGroup, type ReportEntry } from "./report";
+  import { money, invoiceUrlFor, sourceShort, type EntryGroup, type ReportEntry } from "./report";
 
   let {
     group,
     index = 0,
+    showSource = false,
+    sourceNames,
     onpick,
   }: {
     group: EntryGroup;
     index?: number;
+    /** Render the "Quelle" column — on only when several documents are loaded. */
+    showSource?: boolean;
+    /** rel → short, distinguishing name of that document. */
+    sourceNames?: Map<string, string>;
     /** Opens the assign picker for ONE booking. Must reach the expanded child
      *  rows — they carry their own "Beleg holen", and without it it does nothing. */
     onpick?: (e: ReportEntry) => void;
@@ -20,7 +26,12 @@
   const toggle = () => (open = !open);
 
   const provider = $derived(group.items[0].provider);
-  const url = $derived(group.status !== "matched" ? invoiceUrlFor(provider) : undefined);
+  // Newest booking in the group: for a vendor whose invoice page filters by date,
+  // that's the one you're most likely here to fetch.
+  const newest = $derived(group.items.reduce((a, b) => (b.date > a.date ? b : a), group.items[0]).date);
+  const url = $derived(group.status !== "matched" ? invoiceUrlFor(provider, newest) : undefined);
+  /** The documents this group's bookings came from — one name, or how many. */
+  const sources = $derived([...new Set(group.items.map((i) => i.source?.rel).filter((v): v is string => !!v))]);
   const statusLabel = $derived(
     group.status === "matched" ? "Beleg da" : group.status === "mixed" ? "teilweise belegt" : "Beleg fehlt",
   );
@@ -50,6 +61,20 @@
       <span class="provider" use:tooltip={nameTip}>{provider}</span>
     </button>
   </div>
+
+  {#if showSource}
+    <span class="c-source">
+      {#if sources.length === 1}
+        <span class="source-name" use:tooltip={sources[0]}>
+          {sourceNames?.get(sources[0]) || sourceShort(sources[0])}
+        </span>
+      {:else if sources.length > 1}
+        <span class="source-name" use:tooltip={sources.join(" · ")}>{sources.length} Dokumente</span>
+      {:else}
+        <span class="source-name">—</span>
+      {/if}
+    </span>
+  {/if}
 
   <span class="c-date" use:tooltip={"Mehrere Buchungen desselben Kontos — zusammengefasst"}>
     {group.items.length} Buchungen
@@ -100,7 +125,7 @@
        differ only by transaction id, which dedupeCharges keeps them apart by), so
        provider+date+amount is not unique — the index is what separates them. -->
   {#each group.items as item, i (item.provider + item.date + item.amount + "#" + i)}
-    <ReportRow entry={item} child {onpick} />
+    <ReportRow entry={item} child {showSource} {sourceNames} {onpick} />
   {/each}
 {/if}
 
@@ -157,6 +182,16 @@
     text-overflow: ellipsis;
   }
   .c-date { color: var(--text-muted); font-size: 0.85rem; white-space: nowrap; }
+  .c-source { min-width: 0; }
+  .source-name {
+    display: block;
+    max-width: 14ch;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .c-amount {
     justify-self: end;
     font-weight: 800;
@@ -207,7 +242,8 @@
     .group-parent { grid-template-columns: 1fr auto; column-gap: 12px; row-gap: 4px; }
     .c-name { grid-column: 1; grid-row: 1; }
     .c-amount { grid-column: 2; grid-row: 1; }
-    .c-date { grid-column: 1 / -1; grid-row: 2; }
+    .c-date { grid-column: 1; grid-row: 2; }
+    .c-source { grid-column: 2; grid-row: 2; justify-self: end; }
     .c-status { grid-column: 1; grid-row: 3; }
     .c-action { grid-column: 2; grid-row: 3; }
   }

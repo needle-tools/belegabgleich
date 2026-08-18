@@ -57,6 +57,10 @@ export type RunResult = {
   statementSources?: StatementSource[];
   /** PDFs whose bytes had no extractable text (likely scans needing OCR). */
   emptyPdfs: string[];
+  /** Belege in the folder that no booking claimed. The counterpart to the missing
+   *  list: "500 € fehlt an Belegen, 500 € liegt unzugeordnet herum" usually means
+   *  the same handful of documents, matched to nothing. */
+  extras: ExtraInvoice[];
   /** Invoices that can be renamed to the canonical schema (current ≠ proposed). */
   renames: RenamePlan[];
   /** Deduped statement charges — retained so a later invoice can be re-matched
@@ -97,6 +101,16 @@ function dominantPeriod(charges: Charge[]): string {
   const [y, m] = ym.split("-").map(Number);
   return monthFmt.format(new Date(y, m - 1, 1));
 }
+
+/** A Beleg that was read but matched to no booking on any loaded statement. */
+export type ExtraInvoice = {
+  rel: string;
+  provider: string;
+  date: string;
+  /** The document's own total, as extracted ("" when none was found). */
+  total: string;
+  currency: string;
+};
 
 export type RunError = { code: "no_statement"; invoiceCount: number };
 
@@ -160,6 +174,13 @@ function assemble(
   const rows = invoices.map((i) => i.row);
   const match = matchStatement(deduped, rows);
 
+  // Which statement each charge came from, by object identity — dedupeCharges keeps
+  // the first occurrence, so the charge objects here are the ones the sources hold.
+  const origin = new Map<Charge, { rel: string; label: string }>();
+  for (const s of statementSources ?? []) {
+    for (const c of s.charges) if (!origin.has(c)) origin.set(c, { rel: s.rel, label: s.label });
+  }
+
   // Rename plans: every invoice with a confident proposed name that differs from
   // its current name. dedupeNames keeps two same-named targets collision-safe.
   const proposedBasenames = dedupeNames(rows.map((r) => r.proposed));
@@ -179,7 +200,7 @@ function assemble(
   });
 
   return {
-    entries: buildReport(match, deduped),
+    entries: buildReport(match, deduped, origin),
     statements: [...new Set(statements)],
     statementFiles: [...new Set(statementFiles)],
     statementSources,
@@ -187,6 +208,13 @@ function assemble(
     period: dominantPeriod(deduped),
     invoiceCount: rows.length,
     emptyPdfs,
+    extras: match.unmatchedInvoices.map((r) => ({
+      rel: r.rel,
+      provider: r.provider,
+      date: r.date,
+      total: r.total,
+      currency: r.currency,
+    })),
     renames,
     charges: deduped,
     invoices,

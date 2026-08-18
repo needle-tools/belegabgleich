@@ -11,3 +11,12 @@
 export function openBeleg(url: string): void {
   window.open(url, "_blank", "noopener,noreferrer");
 }
+
+/** Open an already-read PDF from its bytes in a new tab. Local only — the blob URL
+ *  never leaves the browser, and is released again once the tab has had it. */
+export function openPdfBytes(data: ArrayBuffer | undefined): void {
+  if (!data) return;
+  const url = URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
+  window.open(url, "_blank", "noopener");
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}

@@ -16,8 +16,10 @@
   import DropOverlay from "./lib/DropOverlay.svelte";
   import PickerModal from "./lib/PickerModal.svelte";
   import RenamePanel from "./lib/RenamePanel.svelte";
+  import ExtrasPanel from "./lib/ExtrasPanel.svelte";
+  import { openPdfBytes } from "./lib/openBeleg";
   import { MOCK_ENTRIES, MOCK_PERIOD, MOCK_STATEMENT, DEMO_SOURCE_PATHS } from "./lib/mock";
-  import { summarize, groupEntries, byAmountDesc, money, type ReportEntry } from "./lib/report";
+  import { summarize, groupEntries, byAmountDesc, money, statementLabels, type ReportEntry } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
   import { collectFromDirectory, type CollectedPdf, type FsDirHandle } from "./lib/collect";
   import { watchFolder, ensureWritable, ensureReadable, deleteFromFolder } from "./lib/folder";
@@ -111,6 +113,16 @@
 
   // Collapse recurring same-account / one-invoice rows into expandable groups.
   const groups = $derived(groupEntries(visible));
+
+  /**
+   * Show which document a booking came from — but only once that question can have
+   * more than one answer. With a single statement loaded the column would repeat the
+   * same filename on every row; with your card statement, someone else's and the
+   * Kontoauszug in one report, it's the first thing you need.
+   */
+  const showSource = $derived((active?.statementSources?.length ?? 0) > 1);
+  /** rel → short, distinguishing name of that document, for the "Quelle" column. */
+  const sourceNames = $derived(statementLabels(active?.statementSources ?? []));
 
   /**
    * The filter IS the summary. Two controls saying the same thing (a segmented
@@ -537,6 +549,12 @@
     if (!demoResult) loadDemoResult().then((d) => { if (!result && !demoResult) demoResult = d; });
   }
 
+  /** Open a read invoice by its display path. Only works while its bytes are in
+   *  memory — a restored session keeps the row but not the PDF. */
+  function openInvoicePdf(rel: string) {
+    openPdfBytes(result?.invoices.find((i) => i.row.rel === rel)?.pdf?.data);
+  }
+
   function exportCsv() {
     downloadCsv(entries);
     track("csv_exported", { bucket: bucket(entries.length) });
@@ -700,7 +718,7 @@
         <span class="micro-label">Belegquote</span>
         <span class="meter-period">{period}</span>
       </div>
-      <CompletenessMeter coverage={summary.coverage} matched={summary.matched} total={summary.total} />
+      <CompletenessMeter coverage={summary.coverage} matched={summary.matched} total={summary.total} compact={live} />
     </div>
   </section>
 
@@ -778,13 +796,13 @@
       </div>
     </div>
 
-    {#key `${filter}:${sort}`}
-      <ul class="rows">
+    {#key `${filter}:${sort}:${showSource}`}
+      <ul class="rows" class:with-source={showSource}>
         {#each groups as group, i (group.key)}
           {#if group.items.length === 1}
-            <ReportRow entry={group.items[0]} index={i} onpick={openPicker} />
+            <ReportRow entry={group.items[0]} index={i} {showSource} {sourceNames} onpick={openPicker} />
           {:else}
-            <GroupRow {group} index={i} onpick={openPicker} />
+            <GroupRow {group} index={i} {showSource} {sourceNames} onpick={openPicker} />
           {/if}
         {/each}
       </ul>
@@ -805,6 +823,16 @@
       <a href="/haftungsausschluss/">Haftungsausschluss</a>
     </p>
   </section>
+
+  <!-- BELEGE WITHOUT A BOOKING — the counterpart to the Fehlend list -->
+  {#if live && result?.extras?.length}
+    <ExtrasPanel
+      extras={result.extras}
+      missingCount={summary.missing}
+      missingSum={summary.sum.missing}
+      onopen={openInvoicePdf}
+    />
+  {/if}
 
   <!-- AUTO-RENAME -->
   {#if result && result.renames.length > 0}
@@ -1053,6 +1081,10 @@
     list-style: none;
     margin: 0;
     padding: 0;
+  }
+  /* …plus a "Quelle" track when more than one document is loaded. */
+  .rows.with-source {
+    grid-template-columns: minmax(0, 1fr) max-content max-content max-content max-content max-content;
   }
   @media (max-width: 640px) {
     .rows { display: flex; flex-direction: column; }

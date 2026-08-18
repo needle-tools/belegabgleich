@@ -16,8 +16,31 @@ const invoiceUrlByProvider = new Map<string, string>(
   providers.filter((p) => p.invoiceUrl).map((p) => [p.name, p.invoiceUrl as string]),
 );
 
-export function invoiceUrlFor(provider: string): string | undefined {
-  return invoiceUrlByProvider.get(provider);
+/**
+ * Fill date placeholders in a vendor URL, so the link lands where the booking is
+ * rather than on page one of everything: `{YYYY}` → 2026, `{MM}` → 04, `{YYYY-MM}`
+ * → 2026-04. Amazon's order list is the case that asked for it — it paginates by
+ * year, and a charge from last March is otherwise a dozen clicks away.
+ *
+ * Without a usable booking date the placeholders fall back to the current year, so
+ * a templated link never degrades into a broken one.
+ */
+export function fillInvoiceUrl(url: string, isoDate?: string): string {
+  if (!url.includes("{")) return url;
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(isoDate ?? "") ? (isoDate as string) : "";
+  const year = iso ? iso.slice(0, 4) : String(new Date().getFullYear());
+  const month = iso ? iso.slice(5, 7) : "01";
+  return url
+    .replaceAll("{YYYY-MM}", `${year}-${month}`)
+    .replaceAll("{YYYY}", year)
+    .replaceAll("{MM}", month);
+}
+
+/** The vendor's invoice page for a provider, aimed at the booking's date where the
+ *  entry supports it. */
+export function invoiceUrlFor(provider: string, isoDate?: string): string | undefined {
+  const url = invoiceUrlByProvider.get(provider);
+  return url ? fillInvoiceUrl(url, isoDate) : undefined;
 }
 
 // Some vendors bill through several portals (Google: Payments Center, Cloud,
@@ -31,9 +54,11 @@ const portalsByProvider = new Map<string, InvoicePortal[]>(
     .map(([name, portals]) => [name, portals as InvoicePortal[]]),
 );
 
-/** Every invoice portal known for a provider — empty when none is on file. */
-export function invoicePortalsFor(provider: string): InvoicePortal[] {
-  return portalsByProvider.get(provider) ?? [];
+/** Every invoice portal known for a provider — empty when none is on file. URLs are
+ *  aimed at `isoDate` where the entry uses a date placeholder. */
+export function invoicePortalsFor(provider: string, isoDate?: string): InvoicePortal[] {
+  const portals = portalsByProvider.get(provider) ?? [];
+  return portals.map((p) => ({ ...p, url: fillInvoiceUrl(p.url, isoDate) }));
 }
 
 /** Public, alphabetically-sorted vendor list for the "supported providers" section. */
@@ -77,6 +102,11 @@ export type ReportEntry = {
   /** Position of the charge in the statement, so the report can be put back into
    *  the order the document prints it — absent on demo rows and older sessions. */
   order?: number;
+  /** Which loaded document this booking was read from — display path and friendly
+   *  label. With two people's card statements plus a Kontoauszug in one report,
+   *  "whose statement is this gap on?" is otherwise unanswerable without going
+   *  back to the PDFs. */
+  source?: { rel: string; label: string };
 };
 
 /**
@@ -92,6 +122,57 @@ export const byAmountDesc = (a: ReportEntry, b: ReportEntry): number => eurOf(b)
  *  across rows, since `amount` may be USD, GBP or JPY. */
 export const eurOf = (e: ReportEntry): number => e.eur ?? e.amount;
 const sumEur = (entries: ReportEntry[]): number => entries.reduce((n, e) => n + eurOf(e), 0);
+
+/**
+ * The statement's own words for a booking, when they say more than the brand name
+ * does. This is where the customer/transaction number sits — the string you paste
+ * into a mail search to find the invoice — and it's what tells two same-day,
+ * same-amount charges apart. Empty when it's just the provider again.
+ */
+export function descriptorOf(e: ReportEntry): string {
+  const raw = (e.merchant ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return norm(raw) === norm(e.provider) ? "" : raw;
+}
+
+/** Short name of a loaded document for the "Quelle" column ("…/10/Auszug.pdf" →
+ *  "Auszug"). The full path stays in the tooltip. */
+export function sourceShort(rel: string): string {
+  return (rel.split(/[/\\]|\s›\s/).pop() ?? rel).replace(/\.[^.]+$/, "");
+}
+
+/**
+ * Short, *distinguishing* names for the loaded statements, keyed by rel.
+ *
+ * The kind of the document ("Kontoauszug", "VISA-Abrechnung") is the useful name —
+ * until two documents share it, which is exactly the case worth naming: your card
+ * statement next to someone else's. Truncating the filename doesn't help there,
+ * because bank exports front-load the noise
+ * ("1234_5678_ABRECHNUNG_2026-04-18_Mustermann_Max" — the part that tells them
+ * apart is at the END). So for same-kind documents we keep the trailing tokens that
+ * aren't shared by all of them, which is the account number, the date or the name.
+ */
+export function statementLabels(sources: readonly { rel: string; label: string }[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const byLabel = new Map<string, typeof sources[number][]>();
+  for (const s of sources) byLabel.set(s.label, [...(byLabel.get(s.label) ?? []), s]);
+
+  for (const [label, group] of byLabel) {
+    if (group.length === 1) {
+      out.set(group[0].rel, label);
+      continue;
+    }
+    const tokensOf = (rel: string) => sourceShort(rel).split(/[_\-\s.]+/).filter(Boolean);
+    const counts = new Map<string, number>();
+    for (const s of group) for (const t of new Set(tokensOf(s.rel))) counts.set(t, (counts.get(t) ?? 0) + 1);
+    for (const s of group) {
+      const own = tokensOf(s.rel).filter((t) => (counts.get(t) ?? 0) < group.length);
+      out.set(s.rel, own.length ? own.slice(-2).join(" ") : sourceShort(s.rel));
+    }
+  }
+  return out;
+}
 
 /** A group of related report rows (recurring same-account or one-invoice). */
 export type EntryGroup = ChargeGroup<ReportEntry & { merchant: string }>;
@@ -158,12 +239,21 @@ function noInvoiceNote(merchant: string): string {
  * "kein Beleg nötig" so they stay out of the Fehlend list. Unmatched invoices
  * are informational and not surfaced as rows.
  */
-export function buildReport(match: MatchResult, ordered?: readonly Charge[]): ReportEntry[] {
+export function buildReport(
+  match: MatchResult,
+  ordered?: readonly Charge[],
+  /** Which document each charge was parsed from, by charge identity. */
+  origin?: Map<Charge, { rel: string; label: string }>,
+): ReportEntry[] {
   const entries: ReportEntry[] = [];
   // Where each charge stands in the statement. The report groups matched before
   // missing, which loses that order — keeping the index lets the UI put it back.
   const position = new Map<Charge, number>();
   (ordered ?? []).forEach((c, i) => position.set(c, i));
+  const sourceOf = (c: Charge) => {
+    const src = origin?.get(c);
+    return src ? { source: src } : {};
+  };
 
   for (const { charge, rows, fx } of match.matched) {
     entries.push({
@@ -175,6 +265,7 @@ export function buildReport(match: MatchResult, ordered?: readonly Charge[]): Re
       invoice: rows.map((r) => r.rel).join(", "),
       ...(eurValueOf(charge) != null ? { eur: eurValueOf(charge) as number } : {}),
       merchant: charge.merchant,
+      ...sourceOf(charge),
       ...(fx ? { note: `Rechnung lautet auf ${fx.currency} — über den Kurs zugeordnet (1 ${fx.currency} ≈ ${rateFmt.format(fx.rate)} €)` } : {}),
       ...(position.has(charge) ? { order: position.get(charge) } : {}),
     });
@@ -191,6 +282,7 @@ export function buildReport(match: MatchResult, ordered?: readonly Charge[]): Re
       ...(noInvoice ? { note: noInvoiceNote(charge.merchant) } : {}),
       ...(eurValueOf(charge) != null ? { eur: eurValueOf(charge) as number } : {}),
       merchant: charge.merchant,
+      ...sourceOf(charge),
       ...(position.has(charge) ? { order: position.get(charge) } : {}),
     });
   }

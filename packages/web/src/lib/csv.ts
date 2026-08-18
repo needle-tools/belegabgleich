@@ -19,7 +19,10 @@ function cell(v: string | number): string {
 }
 
 export function toCsv(entries: ReportEntry[]): string {
-  const header = ["Datum", "Anbieter", "Betrag", "Währung", "Status", "Beleg/Hinweis"];
+  // Quelldokument and Auszugstext ride along: they are what makes a row traceable
+  // back to the page it was read from, which is the first thing anyone checking the
+  // list asks about a gap.
+  const header = ["Datum", "Anbieter", "Betrag", "Währung", "Status", "Beleg/Hinweis", "Quelldokument", "Auszugstext"];
   const rows = entries.map((e) => [
     e.date,
     e.provider,
@@ -27,6 +30,8 @@ export function toCsv(entries: ReportEntry[]): string {
     e.currency,
     STATUS_DE[e.status],
     e.invoice ?? e.note ?? "",
+    e.source?.rel ?? "",
+    e.merchant ?? "",
   ]);
   return [header, ...rows].map((r) => r.map(cell).join(";")).join("\r\n");
 }

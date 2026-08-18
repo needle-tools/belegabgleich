@@ -52,6 +52,7 @@ function toStorable(result: RunResult): RunResult {
     period: result.period,
     invoiceCount: result.invoiceCount,
     emptyPdfs: result.emptyPdfs,
+    extras: result.extras ?? [],
     renames: [], // bytes/handles can't survive the clone; recomputed on next run
     charges: result.charges,
     invoices: result.invoices.map((i) => ({ row: i.row })), // strip pdf bytes/handle

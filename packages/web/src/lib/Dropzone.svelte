@@ -7,6 +7,7 @@
     type CollectedPdf,
   } from "./collect";
   import { summarize } from "./report";
+  import { openPdfBytes } from "./openBeleg";
   import { tooltip } from "./tooltip";
   import type { RunResult, RunProgress } from "./engine";
 
@@ -136,12 +137,7 @@
   /** Open a read invoice's PDF in a new tab from its in-memory bytes (local only,
    *  no upload). Only available for freshly-loaded invoices — a session restore
    *  keeps the row but not the bytes. */
-  function openPdf(pdf?: CollectedPdf) {
-    if (!pdf?.data) return;
-    const url = URL.createObjectURL(new Blob([pdf.data], { type: "application/pdf" }));
-    window.open(url, "_blank", "noopener");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  }
+  const openPdf = (pdf?: CollectedPdf) => openPdfBytes(pdf?.data);
 </script>
 
 <section
