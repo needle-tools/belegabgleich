@@ -1126,7 +1126,7 @@
     {/if}
 
     {#if live && result?.duplicates?.length}
-      <DuplicatesNote duplicates={result.duplicates} />
+      <DuplicatesNote duplicates={result.duplicates} onopen={openInvoicePdf} />
     {/if}
 
     <p class="accuracy-note">
