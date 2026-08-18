@@ -19,7 +19,7 @@
           },
           "invoiceUrl": {
             "type": "string",
-            "description": "Public page to download this vendor's invoices. Generic billing page only — never an account-specific URL."
+            "description": "Public page to download this vendor's invoices. Generic billing page only — never an account-specific URL. May contain the date placeholders {YYYY}, {MM} and {YYYY-MM}, filled from the booking's date, for vendors whose invoice list is paginated by period (e.g. Amazon: ?timeFilter=year-{YYYY})."
           },
           "invoiceUrls": {
             "type": "array",
@@ -30,7 +30,7 @@
               "additionalProperties": false,
               "properties": {
                 "label": { "type": "string", "description": "Button text, e.g. \"Cloud Console\"." },
-                "url": { "type": "string", "description": "Generic invoice/billing page for that portal." }
+                "url": { "type": "string", "description": "Generic invoice/billing page for that portal. Supports the same {YYYY} / {MM} / {YYYY-MM} date placeholders as invoiceUrl." }
               }
             }
           }

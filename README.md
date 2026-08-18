@@ -76,7 +76,15 @@ Ein Eintrag sieht so aus:
   Händlertext auf dem Auszug gematcht werden, z. B. `"CLOUDFLARE.COUS"` →
   `cloudflare`. Beliebig viele; `*` als Platzhalter (`"google*ads"`).
 - **`invoiceUrl`** — die **generische** Rechnungs-/Beleg-Seite des Anbieters. Leer
-  (`""`), wenn es keine stabile öffentliche URL gibt.
+  (`""`), wenn es keine stabile öffentliche URL gibt. Blättert der Anbieter seine
+  Rechnungsliste nach Zeitraum, dürfen die Platzhalter `{YYYY}`, `{MM}` und
+  `{YYYY-MM}` darin stehen — sie werden mit dem **Datum der Buchung** gefüllt, damit
+  der Link im richtigen Jahr landet statt auf Seite 1 von allem:
+
+  ```json
+  { "name": "Amazon", "aliases": ["amazon"],
+    "invoiceUrl": "https://www.amazon.de/your-orders/orders?timeFilter=year-{YYYY}" }
+  ```
 - **`invoiceUrls`** *(optional)* — für Anbieter, die über **mehrere Portale**
   abrechnen. Der Auszug verrät meist nicht, welches es war, also zeigt der
   Beleg-Dialog einen Button pro Portal:
@@ -239,7 +247,15 @@ Each entry looks like this:
   merchant text on the statement, e.g. `"CLOUDFLARE.COUS"` → `cloudflare`.
   Add as many as needed; use `*` as a wildcard (`"google*ads"`).
 - **`invoiceUrl`** — the vendor's **generic** billing/receipts page. Leave it as
-  `""` if there's no stable public URL.
+  `""` if there's no stable public URL. When the vendor paginates its invoice list
+  by period, the placeholders `{YYYY}`, `{MM}` and `{YYYY-MM}` may appear in it —
+  they are filled from the **booking's date**, so the link lands in the right year
+  instead of on page one of everything:
+
+  ```json
+  { "name": "Amazon", "aliases": ["amazon"],
+    "invoiceUrl": "https://www.amazon.de/your-orders/orders?timeFilter=year-{YYYY}" }
+  ```
 - **`invoiceUrls`** *(optional)* — for vendors that bill through **several
   portals**. The statement rarely says which one was charged, so the Beleg dialog
   renders one button per portal:
