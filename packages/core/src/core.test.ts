@@ -295,6 +295,15 @@ test("findDuplicates ignores the same file seen twice, and won't guess", () => {
   expect(findDuplicates([vague, { ...vague, rel: "c/z.pdf" }])).toEqual([]);
 });
 
+test("findDuplicates does not treat two amount-less documents as copies", () => {
+  // A total of 0 is what extraction reports when it found no figure. Two such
+  // documents from one issuer are not the same document — this was declaring whole
+  // folders duplicated.
+  const a = row({ provider: "AWS", total: "0", date: "2026-01-18", rel: "01/aws.pdf" });
+  const b = row({ provider: "AWS", total: "0", date: "2026-01-18", rel: "02/aws-anders.pdf" });
+  expect(findDuplicates([a, b])).toEqual([]);
+});
+
 test("dedupeNames suffixes collisions", () => {
   expect(dedupeNames(["a.pdf", "a.pdf", "b.pdf", "a.pdf"]))
     .toEqual(["a.pdf", "a-2.pdf", "b.pdf", "a-3.pdf"]);

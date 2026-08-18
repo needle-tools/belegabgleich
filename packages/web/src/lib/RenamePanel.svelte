@@ -98,7 +98,7 @@
     </div>
   {/if}
 
-  <ul class="rename-list">
+  <ul class="rename-list scroll-subtle">
     {#each plans as p (p.from)}
       <li class="rename-row">
         <span class="from" use:tooltip={{ text: p.from, truncatedOnly: true }}>{p.from}</span>

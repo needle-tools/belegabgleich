@@ -169,8 +169,12 @@
     picked = [];
   }
 
-  /** File names of the last hand-drawn assignment, for its confirmation message. */
-  const linkedNames = $derived((feedback?.invoice ?? "").split(", ").filter(Boolean).map(baseName));
+  /** The Belege the last outcome refers to. */
+  const fbRels = $derived((feedback?.invoice ?? "").split(", ").filter(Boolean));
+  const linkedNames = $derived(fbRels.map(baseName));
+  /** True when those Belege already live inside a picked folder (their path says so)
+   *  rather than in whatever folder the browser downloaded them to. */
+  const fbInFolder = $derived(fbRels.length > 0 && fbRels.every((r) => /[\/]/.test(r)));
 
   /** How many of the bookings in this dialog are covered now. */
   const coveredCount = $derived(
@@ -208,7 +212,7 @@
   onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
 >
   <div
-    class="modal"
+    class="modal scroll-subtle"
     role="dialog"
     aria-modal="true"
     aria-label={`Beleg zuordnen — ${lead.provider}`}
@@ -234,7 +238,7 @@
       {#if group}
         <!-- One line per booking, each with its own state: after a drop this is the
              list that tells you which month you forgot to download. -->
-        <ul class="booking-list" class:scrolls={entries.length > 8}>
+        <ul class="booking-list scroll-subtle" class:scrolls={entries.length > 8}>
           {#each entries as e, i (keyOf(e, i))}
             {@const inv = covered.get(keyOf(e, i))}
             {@const done = e.status === "matched" || inv != null}
@@ -286,7 +290,10 @@
           {/each}
         </div>
       {:else if portals.length === 1}
-        <p>Bei {lead.provider} herunterladen und unten ablegen{group ? " — gern alle auf einmal" : ""}.</p>
+        <p>
+          Bei {lead.provider} herunterladen und unten ablegen. Mehrere Dateien können
+          auch auf einmal abgelegt werden.
+        </p>
         <button type="button" class="primary" onclick={() => openBeleg(portals[0].url)}>
           {group ? "Rechnungen" : "Rechnung"} bei {lead.provider} herunterladen
           <svg class="ext" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
@@ -330,18 +337,22 @@
         </p>
         {#if group}
           <p class="muted">
-            Mehrere auf einmal sind genau richtig — jeder Beleg geht an die Buchung,
-            deren Betrag er trägt{#if targetLabel}, und in den Ordner neben deren
-              Auszug (also nicht alle in denselben Monat){/if}.
+            Mehrere Dateien können auch auf einmal abgelegt werden: jeder Beleg geht an
+            die Buchung, deren Betrag er trägt{#if targetLabel}, und in den Ordner neben
+              deren Auszug — also nicht alle in denselben Monat{/if}.
           </p>
         {:else if targetLabel}
           <p class="muted">
             Wird in <strong class="dz-target">{targetLabel}</strong> abgelegt — passend
-            benannt, neben den Auszug — und gegen diese Buchung geprüft. Mehrere PDFs
-            gehen auch (z. B. zwei Amazon-Rechnungen für eine Abbuchung).
+            benannt, neben den Auszug — und gegen diese Buchung geprüft. Mehrere Dateien
+            können auch auf einmal abgelegt werden (z. B. zwei Amazon-Rechnungen für
+            eine Abbuchung).
           </p>
         {:else}
-          <p class="muted">Wird gescannt und gegen diese Buchung geprüft. Mehrere PDFs auf einmal sind ok, ZIPs werden ausgepackt, Duplikate übersprungen.</p>
+          <p class="muted">
+            Wird gescannt und gegen diese Buchung geprüft. Mehrere Dateien können auch
+            auf einmal abgelegt werden, ZIPs werden ausgepackt, Duplikate übersprungen.
+          </p>
         {/if}
       {/if}
     </div>
@@ -377,11 +388,20 @@
               <span class="fb-sub">Gespeichert als {saved.join(", ")}{targetLabel ? ` in ${targetLabel.split("/")[0]}` : ""}.</span>
             {:else if existing.length}
               <span class="fb-sub">Lag schon im Ordner: {existing.join(", ")} — nichts doppelt gespeichert.</span>
-            {:else if feedback.invoice}
-              <!-- Nothing was filed, so nothing was renamed either: the PDF keeps
-                   the name it was downloaded under. Say so, or "Beleg zugeordnet"
-                   next to "Heroku _ Invoice.pdf" just looks broken. -->
-              <span class="fb-sub">Nur im Bericht: {feedback.invoice} — die Datei bleibt liegen, wo sie ist, und behält ihren Namen.</span>
+            {:else if fbInFolder}
+              <!-- Nothing was written because nothing had to be: the Beleg that covers
+                   this booking is already in the folder. -->
+              <span class="fb-sub">Der passende Beleg liegt schon im Ordner: {fbRels.join(", ")}.</span>
+            {:else if fbRels.length}
+              <!-- Nothing was filed, so nothing was renamed either: the PDF keeps the
+                   name it was downloaded under, in the folder it was downloaded to.
+                   Say which, or "Beleg zugeordnet" next to "Heroku _ Invoice.pdf" just
+                   looks broken. -->
+              <span class="fb-sub">
+                {linkedNames.join(", ")} wurde nicht in deinen Belegordner kopiert und
+                bleibt unter diesem Namen im Download-Ordner. Im Bericht gilt die
+                Buchung trotzdem als belegt.
+              </span>
             {/if}
           </div>
         {:else if feedback.kind === "manual"}
@@ -615,27 +635,30 @@
   }
   .booking-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
   /* One row per booking in a group, with a checkmark slot that fills in as Belege
-     land. The slot is always there, so nothing shifts when it does. */
+     land. The slot is always there, so nothing shifts when it does.
+
+     The column widths live on the LIST, not on each row (rows subgrid them): sized
+     per row, "0,15 $" and "0,06 $" pushed the state column to a different place on
+     every line and the whole block read as ragged. */
   .booking-list {
+    display: grid;
+    grid-template-columns: 18px max-content minmax(0, 1fr) max-content;
+    gap: 4px 10px;
     list-style: none;
     margin: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
   }
   /* Only a long group scrolls; a scrollbar next to three rows is just noise. */
   .booking-list.scrolls {
     max-height: 40vh;
     overflow-y: auto;
-    scrollbar-width: thin;
     overscroll-behavior: contain;
   }
   .booking-list li {
+    grid-column: 1 / -1;
     display: grid;
-    grid-template-columns: 18px max-content 1fr max-content;
+    grid-template-columns: subgrid;
     align-items: baseline;
-    gap: 10px;
     font-size: 0.9rem;
   }
   .booking-mark {

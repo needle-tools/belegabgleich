@@ -69,7 +69,27 @@ h3 {
   margin: 0;
   font-family: var(--font-family-display);
 }
-p {
+h4,
+h5,
+h6,
+dt,
+strong {
+  text-wrap: balance;
+}
+/* Every other run of copy — including the tool's many span-based hints, feedback
+   lines and list items — avoids leaving a single word on the last line. Deliberately
+   broad: on single-line text `pretty` does nothing at all, so this can't cost
+   anything, and it saves every component from remembering it. */
+p,
+li,
+dd,
+label,
+summary,
+figcaption,
+blockquote,
+span,
+small,
+em {
   text-wrap: pretty;
 }
 
@@ -102,7 +122,10 @@ a {
 /* Tooltip bubble for the `tooltip` action (appended to <body>, position fixed). */
 .tooltip-pop {
   position: fixed;
-  z-index: 100;
+  /* Above every overlay, including the assign dialog (z-index 210) — a tooltip that
+     renders behind the thing it explains is worse than no tooltip. It is appended to
+     <body> and never takes pointer events, so being topmost is always correct. */
+  z-index: 300;
   max-width: 320px;
   padding: 6px 10px;
   border-radius: 8px;
@@ -1463,4 +1486,34 @@ a.provider-tag:hover {
   .page-hero-aside {
     animation: fade-up 0.5s cubic-bezier(0.2, 0, 0, 1) 0.1s backwards;
   }
+}
+
+/* Subtle scrollbars for the app's in-panel lists (loaded statements, duplicates,
+   long selections). The platform default is a heavy grey bar that reads as a piece of
+   chrome dropped into a quiet panel; this is a thin thumb on no track at all, and it
+   only shows up where a list actually overflows. Global rather than per-component so
+   the four lists that scroll can't drift apart. */
+.scroll-subtle {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 40%, transparent) transparent;
+}
+.scroll-subtle::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scroll-subtle::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-subtle::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 35%, transparent);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+.scroll-subtle:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 55%, transparent);
+  background-clip: padding-box;
+}
+.scroll-subtle::-webkit-scrollbar-button {
+  display: none;
 }

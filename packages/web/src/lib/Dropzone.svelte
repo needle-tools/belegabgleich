@@ -235,7 +235,7 @@
 
       <!-- Which files are actually in this report — at the top level, not behind
            a disclosure. Loading a second file has to visibly add a row. -->
-      <div class="dz-sources-wrap" class:scrolls={sourcesScroll}>
+      <div class="dz-sources-wrap scroll-subtle" class:scrolls={sourcesScroll}>
         {#each sourceGroups as g (g.path)}
           {#if manyFolders}
             <p class="dz-folder" title={g.path}>
@@ -357,7 +357,7 @@
             {result.statementFiles?.length ?? 0} Auszüge · {result.invoices.length} Rechnungen{#if result.emptyPdfs.length} · {result.emptyPdfs.length} übersprungen{/if}
           </span>
         </summary>
-        <div class="dz-files-body">
+        <div class="dz-files-body scroll-subtle">
           <table class="dz-table">
             <tbody>
               {#each statementList as s (s.rel)}
@@ -610,28 +610,6 @@
     max-height: 240px;
     overflow: auto;
     padding-right: 12px; /* keep the rows clear of the scrollbar */
-    /* slim, on-brand scrollbar with a visible track */
-    scrollbar-width: thin;
-    scrollbar-color: var(--border-strong) var(--surface-panel-muted);
-  }
-  .dz-files-body::-webkit-scrollbar {
-    width: 12px;
-    height: 12px;
-  }
-  .dz-files-body::-webkit-scrollbar-track {
-    background: var(--surface-panel-muted);
-    border-radius: 999px;
-  }
-  .dz-files-body::-webkit-scrollbar-thumb {
-    background: var(--border-strong);
-    border-radius: 999px;
-    border: 3px solid var(--surface-panel-muted);
-  }
-  .dz-files-body::-webkit-scrollbar-thumb:hover {
-    background: var(--text-muted);
-  }
-  .dz-files-body::-webkit-scrollbar-button {
-    display: none;
   }
   .dz-table {
     width: 100%;
@@ -693,8 +671,6 @@
   .dz-sources-wrap.scrolls {
     max-height: 46vh;
     overflow-y: auto;
-    padding-right: 8px;
-    scrollbar-width: thin;
     overscroll-behavior: contain;
   }
   /* The folder is the heading, because with a year of statements it's the folder that
@@ -707,7 +683,9 @@
     align-items: center;
     gap: 6px;
     margin: 10px 0 4px;
-    padding: 2px 0;
+    /* Same right inset as a row's padding, so the folder's ✕ sits in the same column
+       as the files' ✕ rather than a few pixels further out. */
+    padding: 2px 12px 2px 0;
     background: var(--surface-callout-success);
     color: var(--text-secondary);
     font-size: var(--type-micro-label-size);
@@ -726,7 +704,7 @@
   }
   .dz-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The folder's own remove sits at the end of its heading, like the file rows'. */
-  .dz-folder .dz-remove { margin-left: auto; width: 22px; height: 22px; }
+  .dz-folder .dz-remove { margin-left: auto; opacity: 0.55; }
   .dz-folder:hover .dz-remove, .dz-folder .dz-remove:focus-visible { opacity: 1; }
   .dz-sources {
     list-style: none;

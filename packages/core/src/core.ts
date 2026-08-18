@@ -493,7 +493,10 @@ export function dedupeNames(proposed: string[]): string[] {
 export function documentKey(f: Pick<Fields, "provider" | "date" | "total" | "invoice_number">): string {
   const provider = canon(f.provider);
   const total = parseFloat(f.total);
-  if (!provider || provider === "Unknown" || !isFinite(total)) return "";
+  // A zero total is not an identity: it's what extraction returns when it found no
+  // figure at all, and treating it as one declares every such document a copy of
+  // every other one from the same issuer.
+  if (!provider || provider === "Unknown" || !isFinite(total) || total <= 0) return "";
   const num = slug(f.invoice_number).toLowerCase();
   if (!num && !ISO.test(f.date)) return "";
   return `${provider}|${total.toFixed(2)}|${num || f.date}`;
