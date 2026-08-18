@@ -17,7 +17,7 @@
   import PickerModal from "./lib/PickerModal.svelte";
   import RenamePanel from "./lib/RenamePanel.svelte";
   import { MOCK_ENTRIES, MOCK_PERIOD, MOCK_STATEMENT, DEMO_SOURCE_PATHS } from "./lib/mock";
-  import { summarize, groupEntries, byAmountDesc, type ReportEntry } from "./lib/report";
+  import { summarize, groupEntries, byAmountDesc, money, type ReportEntry } from "./lib/report";
   import type { RunResult, RunError, RunProgress } from "./lib/engine";
   import { collectFromDirectory, type CollectedPdf, type FsDirHandle } from "./lib/collect";
   import { watchFolder, ensureWritable, ensureReadable, deleteFromFolder } from "./lib/folder";
@@ -44,11 +44,20 @@
   let pickerEntry = $state<ReportEntry | null>(null);
   function openPicker(e: ReportEntry) {
     pickerEntry = e;
-    // Ask for write access here, on the click that opens the picker: it's a real
-    // user gesture, and the moment the user has clearly decided to add a Beleg.
-    // Doing it later, when the file is dropped, risks Chrome refusing the prompt
-    // for lack of transient activation — and then nothing gets filed, silently.
-    const t = targetFor(e);
+  }
+
+  /**
+   * Ask for write access, at the gesture that hands us a file — the drop itself, or
+   * the click that opens the file dialog. Merely opening "Beleg holen" used to
+   * prompt, which reads as "this page wants to change my files" before the user has
+   * offered one, and that is alarming for no reason.
+   *
+   * It still has to happen on a gesture rather than inside the write: Chrome refuses
+   * requestPermission() without transient activation, and by the time a PDF has been
+   * read and parsed that activation may be gone.
+   */
+  function prepareFiling(entry?: ReportEntry) {
+    const t = targetFor(entry ?? pickerEntry ?? undefined);
     if (t) void ensureWritable(t.root);
   }
 
@@ -66,7 +75,7 @@
   let menuOpen = $state(false);
   const closeMenu = () => (menuOpen = false);
 
-  type Filter = "missing" | "all" | "matched";
+  type Filter = "missing" | "all" | "matched" | "no_invoice";
   let filter = $state<Filter>("missing");
 
   // How the rows are ordered. A–Z first: looking for one vendor's Beleg is the
@@ -97,32 +106,49 @@
   );
 
   const visible = $derived(
-    entries
-      .filter((e) =>
-        filter === "all" ? true : filter === "missing" ? e.status === "missing" : e.status === "matched",
-      )
-      .sort(comparator),
+    entries.filter((e) => filter === "all" || e.status === filter).sort(comparator),
   );
 
   // Collapse recurring same-account / one-invoice rows into expandable groups.
   const groups = $derived(groupEntries(visible));
 
-  const filters = $derived<{ id: Filter; label: string; count: number }[]>([
-    { id: "missing", label: "Fehlend", count: summary.missing },
-    { id: "matched", label: "Zugeordnet", count: summary.matched },
-    { id: "all", label: "Alle", count: entries.length },
+  /**
+   * The filter IS the summary. Two controls saying the same thing (a segmented
+   * "Fehlend 4 · Zugeordnet 7 · Alle 15" above a strip of "4 FEHLEND · 7
+   * ZUGEORDNET · …") made the reader match numbers across them to see they were
+   * the same set; the counts you read are now the buttons you press.
+   */
+  type FilterTile = { id: Filter; label: string; count: number; sum: number; tone?: "ok" | "warn"; hint: string };
+  const filters = $derived<FilterTile[]>([
+    { id: "all", label: entries.length === 1 ? "Buchung" : "Buchungen", count: entries.length, sum: summary.sum.all,
+      hint: "Alle Buchungen auf dem Auszug" },
+    { id: "matched", label: "zugeordnet", count: summary.matched, sum: summary.sum.matched, tone: "ok",
+      hint: "Buchungen, zu denen ein Beleg im Ordner liegt" },
+    { id: "missing", label: "fehlend", count: summary.missing, sum: summary.sum.missing, tone: "warn",
+      hint: "Buchungen ohne Beleg — die Arbeit, die noch vor dir liegt" },
+    { id: "no_invoice", label: "kein Beleg nötig", count: summary.noInvoice, sum: summary.sum.noInvoice,
+      hint: "Gehalt, Steuer, Kartenabrechnung — dafür stellt niemand eine Rechnung" },
   ]);
 
   /** `auto`: added by the folder watcher rather than by the user — don't count it
    *  as a folder selection and don't yank the filter out from under them. */
   async function onLoad(pdfs: CollectedPdf[], opts: { auto?: boolean } = {}): Promise<RunResult | null> {
-    busy = true;
     errorMsg = "";
     // Accumulate across drops/picks so several folders or files can be added.
     const seen = new Set(sources.map((p) => p.rel));
-    const merged = [...sources, ...pdfs.filter((p) => !seen.has(p.rel))];
-    sources = merged;
+    const fresh = pdfs.filter((p) => !seen.has(p.rel));
     void rememberFolders(pdfs); // keep the folder itself across reloads
+    // Adding a folder whose PDFs are all known already changed nothing at all, and
+    // silence there is what read as "it's broken". Say so instead of doing a
+    // no-op run that ends with the same numbers.
+    if (!fresh.length && result) {
+      if (!opts.auto) notify(`Keine neuen PDFs gefunden — dieser Ordner ist schon eingelesen`);
+      return result;
+    }
+    busy = true;
+    const merged = [...sources, ...fresh];
+    sources = merged;
+    const adding = !!result?.charges?.length;
     if (!opts.auto) track("folder_selected", { bucket: bucket(merged.length) });
     try {
       // Lazy-load the engine so pdf.js (the heavy chunk) only downloads on first use.
@@ -131,11 +157,14 @@
       // With a report already in hand (live, or restored from the session), match
       // the new PDFs against the charges we already parsed — the statement PDF
       // need not still be present. Only the very first load runs from scratch.
-      const r = result?.charges?.length
-        ? await addInvoices(result, pdfs, onP)
-        : await run(merged, onP);
+      const r = adding ? await addInvoices(result!, fresh, onP) : await run(merged, onP);
       result = r;
       if (!opts.auto) filter = "missing";
+      // Adding to an existing report leaves the panel looking untouched apart from
+      // the numbers — name what arrived, or the click reads as having done nothing.
+      if (adding && !opts.auto) {
+        notify(`${fresh.length} ${fresh.length === 1 ? "Datei" : "Dateien"} ergänzt`);
+      }
       saveSession(r); // survive a refresh (local only)
       track("statement_detected", { parser: r.parserIds[0] });
       track("report_generated", { bucket: bucket(r.entries.length) });
@@ -421,11 +450,17 @@
   const watchedRoots = $derived(folders);
   // Identity of the watched set, so re-reading a folder doesn't rebuild watchers.
   const watchKey = $derived(watchedRoots.map((r) => r.name).join("|"));
-  /** Short note in the dropzone when the watcher added something. */
+  /** Short note in the dropzone — what the last folder read actually did. */
   let autoNotice = $state("");
   let autoTimer: ReturnType<typeof setTimeout> | undefined;
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   const dirtyRoots = new Set<FsDirHandle>();
+
+  function notify(message: string) {
+    autoNotice = message;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => (autoNotice = ""), 8000);
+  }
 
   function scheduleRescan(root: FsDirHandle) {
     dirtyRoots.add(root);
@@ -453,9 +488,7 @@
     }
     if (!fresh.length) return;
     await onLoad(fresh, { auto: true });
-    autoNotice = `${fresh.length} neue ${fresh.length === 1 ? "Datei" : "Dateien"} aus dem Ordner ergänzt`;
-    clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => (autoNotice = ""), 8000);
+    notify(`${fresh.length} neue ${fresh.length === 1 ? "Datei" : "Dateien"} aus dem Ordner ergänzt`);
   }
 
   $effect(() => {
@@ -582,6 +615,7 @@
     entry={pickerEntry}
     loadError={errorMsg}
     onload={onAssign}
+    onprepare={() => prepareFiling()}
     onclose={() => (pickerEntry = null)}
     targetLabel={pickerTarget?.label ?? ""}
     saved={filedTo}
@@ -641,20 +675,24 @@
 
 <main id="main">
   <!-- WORKING HEADER — states the job, then gets out of the way -->
-  <section class="app-intro">
+  <!-- Once real files are loaded the pitch has done its job: the explanation, the
+       demo download and its hint step aside so the report starts higher up. -->
+  <section class="app-intro" data-live={live}>
     <div class="app-intro-copy">
       <h1>Belege abgleichen</h1>
-      <p>Lade deinen Kontoauszug oder deine Kreditkartenabrechnung und den Ordner mit
-        deinen Rechnungen. Beides wird hier im Browser gelesen — nichts wird hochgeladen.</p>
-      <button class="btn btn-ghost btn-sm" type="button" onclick={downloadDemo}>
-        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3 3-3M3 13h10" /></svg>
-        Demo-Dateien herunterladen
-      </button>
-      <span class="demo-hint">
-        Kein eigener Auszug zur Hand? Lade zwei erfundene Beispiel-PDFs herunter und
-        zieh sie anschließend hier auf die Seite — der Ablauf ist derselbe wie mit
-        echten Unterlagen.
-      </span>
+      {#if !live}
+        <p>Lade deinen Kontoauszug oder deine Kreditkartenabrechnung und den Ordner mit
+          deinen Rechnungen. Beides wird hier im Browser gelesen — nichts wird hochgeladen.</p>
+        <button class="btn btn-ghost btn-sm" type="button" onclick={downloadDemo}>
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3 3-3M3 13h10" /></svg>
+          Demo-Dateien herunterladen
+        </button>
+        <span class="demo-hint">
+          Kein eigener Auszug zur Hand? Lade zwei erfundene Beispiel-PDFs herunter und
+          zieh sie anschließend hier auf die Seite — der Ablauf ist derselbe wie mit
+          echten Unterlagen.
+        </span>
+      {/if}
     </div>
 
     <div class="app-intro-meter">
@@ -691,31 +729,36 @@
         <h2>Fehlende Belege</h2>
         <span class="source">{statementLabel}</span>
       </div>
-      <div class="segmented-control" role="tablist" aria-label="Filter">
-        {#each filters as f (f.id)}
-          <button role="tab" aria-selected={filter === f.id} onclick={() => (filter = f.id)}>
-            {f.label}<i class="count">{f.count}</i>
-          </button>
-        {/each}
-      </div>
+      <button
+        class="btn-export"
+        type="button"
+        onclick={exportCsv}
+        disabled={entries.length === 0}
+        use:tooltip={"Alle Buchungen mit Status als CSV speichern — für den Steuerberater (Excel-kompatibel)"}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3 3-3M3 13h10" /></svg>
+        CSV exportieren
+      </button>
     </div>
 
-    <div class="status-strip" aria-label="Zusammenfassung">
-      <div class="status-strip-item">
-        <strong class="num">{summary.total}</strong><span class="status-strip-label">Buchungen</span>
-      </div>
-      <div class="sep" aria-hidden="true"></div>
-      <div class="status-strip-item">
-        <strong class="num ok">{summary.matched}</strong><span class="status-strip-label">zugeordnet</span>
-      </div>
-      <div class="sep" aria-hidden="true"></div>
-      <div class="status-strip-item">
-        <strong class="num warn">{summary.missing}</strong><span class="status-strip-label">fehlend</span>
-      </div>
-      <div class="sep" aria-hidden="true"></div>
-      <div class="status-strip-item">
-        <strong class="num">{summary.noInvoice}</strong><span class="status-strip-label">kein Beleg nötig</span>
-      </div>
+    <div class="status-strip" role="tablist" aria-label="Buchungen filtern">
+      {#each filters as f (f.id)}
+        <button
+          class="stat"
+          type="button"
+          role="tab"
+          aria-selected={filter === f.id}
+          data-tone={f.tone ?? "plain"}
+          onclick={() => (filter = f.id)}
+          use:tooltip={f.hint}
+        >
+          <span class="stat-head">
+            <strong class="num">{f.count}</strong>
+            <span class="status-strip-label">{f.label}</span>
+          </span>
+          <span class="stat-sum">{money(f.sum, "EUR")}</span>
+        </button>
+      {/each}
       <div class="strip-spacer"></div>
       <div class="sort-control" role="group" aria-label="Sortierung">
         <span class="sort-label">Sortieren</span>
@@ -733,16 +776,6 @@
           {/each}
         </div>
       </div>
-      <button
-        class="btn-export"
-        type="button"
-        onclick={exportCsv}
-        disabled={entries.length === 0}
-        use:tooltip={"Alle Buchungen mit Status als CSV speichern — für den Steuerberater (Excel-kompatibel)"}
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3 3-3M3 13h10" /></svg>
-        CSV exportieren
-      </button>
     </div>
 
     {#key `${filter}:${sort}`}
@@ -834,7 +867,15 @@
     font-weight: var(--type-page-title-weight);
     line-height: var(--type-page-title-line-height);
     letter-spacing: var(--type-page-title-tracking);
+    text-wrap: balance;
   }
+  /* Working state: title and Belegquote on one quiet line, everything else gone. */
+  .app-intro[data-live="true"] {
+    padding: 20px 0 18px;
+    gap: 24px;
+  }
+  .app-intro[data-live="true"] h1 { font-size: var(--type-section-title-size); }
+  .app-intro[data-live="true"] .app-intro-meter { padding: 16px 20px; }
   .app-intro p {
     margin: 14px 0 20px;
     max-width: 52ch;
@@ -909,14 +950,43 @@
     font-variant-numeric: tabular-nums;
   }
   .segmented-control button { font-family: var(--font-family-body); }
-  .count {
-    margin-left: 6px;
-    font-style: normal;
-    font-variant-numeric: tabular-nums;
-    opacity: 0.6;
-  }
 
-  .status-strip { margin-bottom: 16px; flex-wrap: wrap; }
+  /* The summary and the filter are one control: each figure is the button that
+     shows exactly those rows. Concentric radii — the strip's 14px minus its 6px
+     padding leaves 8px for a tile. */
+  .status-strip { margin-bottom: 16px; flex-wrap: wrap; padding: 6px; gap: 2px; }
+  .stat {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    padding: 6px 12px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    font-family: var(--font-family-body);
+    cursor: pointer;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease, scale 0.12s ease;
+  }
+  .stat-head { display: flex; align-items: baseline; gap: 6px; }
+  .stat:hover { background: var(--surface-panel-muted); }
+  .stat[aria-selected="true"] {
+    background: var(--control-segmented-segment-background-selected);
+    box-shadow: inset 0 0 0 1px var(--control-segmented-segment-border-color-selected);
+  }
+  .stat:active { scale: 0.96; }
+  /* The sum answers "how bad is it?" without opening the list. Quiet: the count is
+     still the headline, the money is its footnote. */
+  .stat-sum {
+    font-size: 0.76rem;
+    font-weight: 650;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat[aria-selected="true"] .stat-sum,
+  .stat[data-tone="warn"] .stat-sum { color: var(--text-secondary); }
   /* Sort switch: same segmented control as the filter, so the two read as one
      row of controls rather than two kinds of thing. */
   .sort-control {
@@ -950,9 +1020,8 @@
     letter-spacing: -0.02em;
     font-variant-numeric: tabular-nums;
   }
-  .num.ok { color: var(--accent-brand-deep); }
-  .num.warn { color: var(--status-warn-text); }
-  .sep { width: 1px; height: 26px; background: var(--border-subtle); }
+  .stat[data-tone="ok"] .num { color: var(--accent-brand-deep); }
+  .stat[data-tone="warn"] .num { color: var(--status-warn-text); }
   .strip-spacer { flex: 1; }
   .btn-export {
     display: inline-flex;

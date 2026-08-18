@@ -86,8 +86,12 @@ export type ReportEntry = {
  * order by nothing at all. A foreign charge whose statement never printed the EUR
  * side keeps its own figure — imperfect, but better than dropping it out of order.
  */
-export const byAmountDesc = (a: ReportEntry, b: ReportEntry): number =>
-  (b.eur ?? b.amount) - (a.eur ?? a.amount);
+export const byAmountDesc = (a: ReportEntry, b: ReportEntry): number => eurOf(b) - eurOf(a);
+
+/** What the bank booked for this row in EUR — the only figure that can be summed
+ *  across rows, since `amount` may be USD, GBP or JPY. */
+export const eurOf = (e: ReportEntry): number => e.eur ?? e.amount;
+const sumEur = (entries: ReportEntry[]): number => entries.reduce((n, e) => n + eurOf(e), 0);
 
 /** A group of related report rows (recurring same-account or one-invoice). */
 export type EntryGroup = ChargeGroup<ReportEntry & { merchant: string }>;
@@ -108,14 +112,31 @@ export type Summary = {
   missing: number;
   noInvoice: number;
   coverage: number; // 0..1 over Beleg-expecting charges
+  /** Booked EUR per bucket. "4 fehlend" says nothing about how bad it is; a sum of
+   *  2.400 € next to it does — and it's what you compare against the unassigned
+   *  Belege to decide whether the gap is real. */
+  sum: { all: number; matched: number; missing: number; noInvoice: number };
 };
 
 export function summarize(entries: ReportEntry[]): Summary {
-  const noInvoice = entries.filter((e) => e.status === "no_invoice").length;
-  const matched = entries.filter((e) => e.status === "matched").length;
-  const missing = entries.filter((e) => e.status === "missing").length;
-  const total = matched + missing; // only charges that should have a Beleg
-  return { total, matched, missing, noInvoice, coverage: total ? matched / total : 1 };
+  const of = (s: ReportStatus) => entries.filter((e) => e.status === s);
+  const matched = of("matched");
+  const missing = of("missing");
+  const noInvoice = of("no_invoice");
+  const total = matched.length + missing.length; // only charges that should have a Beleg
+  return {
+    total,
+    matched: matched.length,
+    missing: missing.length,
+    noInvoice: noInvoice.length,
+    coverage: total ? matched.length / total : 1,
+    sum: {
+      all: sumEur(entries),
+      matched: sumEur(matched),
+      missing: sumEur(missing),
+      noInvoice: sumEur(noInvoice),
+    },
+  };
 }
 
 /** Short German reason a debit needs no vendor invoice (payroll, tax, card settlement). */

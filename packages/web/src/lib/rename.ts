@@ -55,7 +55,25 @@ export function downloadRenamedZip(plans: RenamePlan[], filename = "belege-umben
   URL.revokeObjectURL(url);
 }
 
-export type RenameOutcome = { ok: number; failed: string[]; denied: boolean };
+/** One file that could not be renamed, with the reason the API gave. "1
+ *  fehlgeschlagen" on its own leaves the user with no idea which Beleg is still
+ *  wrongly named, or why — and the usual causes (a file of that name already
+ *  there, the file open elsewhere) are all actionable once named. */
+export type RenameFailure = { from: string; to: string; reason: string };
+export type RenameOutcome = { ok: number; failed: RenameFailure[]; denied: boolean };
+
+/** Why a move() rejected, in plain German where we can recognize it. */
+function renameReason(e: unknown): string {
+  const name = (e as { name?: string })?.name ?? "";
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  if (name === "NoModificationAllowedError" || /in use|being used|locked/i.test(msg))
+    return "Datei ist gerade in Benutzung (z. B. im PDF-Viewer geöffnet)";
+  if (name === "TypeMismatchError" || /exists/i.test(msg))
+    return "In diesem Ordner liegt schon eine Datei mit dem Zielnamen";
+  if (name === "NotAllowedError") return "Schreibzugriff wurde entzogen";
+  if (name === "NotFoundError") return "Datei liegt nicht mehr an diesem Ort";
+  return msg || "unbekannter Fehler";
+}
 
 /** Rename files in place on disk. Requests readwrite once per distinct root. */
 export async function renameInPlace(plans: RenamePlan[]): Promise<RenameOutcome> {
@@ -72,14 +90,15 @@ export async function renameInPlace(plans: RenamePlan[]): Promise<RenameOutcome>
   }
 
   let ok = 0;
-  const failed: string[] = [];
+  const failed: RenameFailure[] = [];
   for (const p of renamable) {
     if (p.base === p.from.split(/[/\\]|\s›\s/).pop()) continue; // already named right
     try {
       await p.handle!.move!(p.base);
       ok++;
-    } catch {
-      failed.push(p.from);
+    } catch (e) {
+      console.warn(`[rename] „${p.from}" → „${p.base}" fehlgeschlagen:`, e);
+      failed.push({ from: p.from, to: p.base, reason: renameReason(e) });
     }
   }
   return { ok, failed, denied: false };

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { track, bucket } from "@kah/analytics";
   import { tooltip } from "./tooltip";
-  import { canRenameInPlace, downloadRenamedZip, renameInPlace, type RenamePlan } from "./rename";
+  import { canRenameInPlace, downloadRenamedZip, renameInPlace, type RenameFailure, type RenamePlan } from "./rename";
 
   let { plans }: { plans: RenamePlan[] } = $props();
 
@@ -9,30 +9,36 @@
   let busy = $state(false);
   let done = $state("");
   let error = $state("");
+  /** Which files stayed behind, and why — listed, not counted. */
+  let failures = $state<RenameFailure[]>([]);
+  const baseName = (rel: string) => rel.split(/[/\\]|\s›\s/).pop() ?? rel;
 
   function exportZip() {
     downloadRenamedZip(plans);
     track("rename_applied", { bucket: bucket(plans.length) });
     done = `${plans.length} ${plans.length === 1 ? "Beleg" : "Belege"} als ZIP heruntergeladen.`;
     error = "";
+    failures = [];
   }
 
   async function applyInPlace() {
     busy = true;
     error = "";
     done = "";
+    failures = [];
     try {
       const r = await renameInPlace(plans);
       if (r.denied) {
         error = "Ohne Schreibrechte für den Ordner kann nicht umbenannt werden.";
       } else {
         track("rename_applied", { bucket: bucket(r.ok) });
-        done =
-          `${r.ok} ${r.ok === 1 ? "Beleg" : "Belege"} im Ordner umbenannt.` +
-          (r.failed.length ? ` ${r.failed.length} fehlgeschlagen.` : "");
+        done = `${r.ok} ${r.ok === 1 ? "Beleg" : "Belege"} im Ordner umbenannt.`;
+        failures = r.failed;
       }
-    } catch {
-      error = "Beim Umbenennen ist etwas schiefgelaufen.";
+    } catch (e) {
+      console.error("[rename] fehlgeschlagen:", e);
+      const detail = e instanceof Error ? e.message : String(e ?? "");
+      error = `Beim Umbenennen ist etwas schiefgelaufen${detail ? `: ${detail}` : ""}.`;
     } finally {
       busy = false;
     }
@@ -78,6 +84,18 @@
   {/if}
   {#if error}
     <p class="rename-msg err" role="alert">{error}</p>
+  {/if}
+  {#if failures.length}
+    <div class="rename-msg err" role="alert">
+      <strong>
+        {failures.length === 1 ? "Ein Beleg" : `${failures.length} Belege`} behielten ihren Namen:
+      </strong>
+      <ul class="rename-fails">
+        {#each failures as f (f.from)}
+          <li><span class="fail-file">{baseName(f.from)}</span> — {f.reason}</li>
+        {/each}
+      </ul>
+    </div>
   {/if}
 
   <ul class="rename-list">
@@ -177,6 +195,18 @@
     background: color-mix(in srgb, var(--status-warn-text) 12%, transparent);
     color: var(--status-warn-text);
   }
+
+  .rename-fails {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-weight: 500;
+    font-size: 0.83rem;
+  }
+  .fail-file { font-weight: 700; overflow-wrap: anywhere; }
 
   .rename-list {
     list-style: none;

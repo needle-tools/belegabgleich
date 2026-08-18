@@ -224,7 +224,21 @@
         {/if}
         — <a class="dz-link" href="#report">siehe Tabelle unten</a>
       </p>
-      {#if notice}
+      <!-- Adding a second folder to a finished report used to show nothing at all:
+           this panel outranks the "wird gelesen" state below, so a long folder scan
+           looked like a dead button. The work says so here instead. -->
+      {#if working}
+        <p class="dz-progress" role="status" aria-live="polite">
+          <span class="dz-spinner-sm" aria-hidden="true"></span>
+          {#if collecting}
+            Ordner wird gelesen — {found} {found === 1 ? "Datei" : "Dateien"} gefunden …
+          {:else if progress}
+            {progress.done} / {progress.total} ausgelesen · {baseName(progress.name)}
+          {:else}
+            Wird ausgelesen …
+          {/if}
+        </p>
+      {:else if notice}
         <p class="dz-notice" role="status">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
           {notice}
@@ -691,6 +705,34 @@
     font-size: 0.86rem;
     text-align: left;
   }
+  /* Work in progress on top of an existing report. Same pill as the notice below,
+     so the two read as one slot that changes its mind. */
+  .dz-progress {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0 0;
+    padding: 4px 12px;
+    border-radius: 999px;
+    background: var(--surface-panel-muted);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+  .dz-spinner-sm {
+    width: 13px;
+    height: 13px;
+    flex: none;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--accent-brand-deep) 25%, transparent);
+    border-top-color: var(--accent-brand-deep);
+    animation: dz-spin 0.7s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dz-spinner-sm { animation-duration: 1.6s; }
+  }
+
   /* The folder watcher speaking up — quiet, and it disappears again on its own. */
   .dz-notice {
     display: inline-flex;

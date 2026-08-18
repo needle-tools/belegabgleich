@@ -29,10 +29,13 @@
   const state = $derived(
     missing === 0 ? "done" : coverage >= 0.9 ? "close" : coverage >= 0.5 ? "partial" : "poor",
   );
+  // "von 11 Buchungen" beside a summary that counts 15 reads as a contradiction:
+  // the ring only ever covers the bookings that need a Beleg at all, and it has to
+  // say so.
   const sub = $derived(
     missing === 0
-      ? `alle ${total} ${total === 1 ? "Buchung" : "Buchungen"} gedeckt`
-      : `von ${total} ${total === 1 ? "Buchung" : "Buchungen"}`,
+      ? `alle ${total} belegpflichtigen gedeckt`
+      : `von ${total} belegpflichtigen`,
   );
 
   // let the first frame paint the empty ring, then the CSS transition fills it
@@ -66,7 +69,7 @@
   class="meter"
   data-complete={missing === 0}
   data-state={state}
-  aria-label={`${missing} von ${total} Buchungen ohne Beleg`}
+  aria-label={`${missing} von ${total} belegpflichtigen Buchungen ohne Beleg`}
 >
   <svg viewBox="0 0 120 120" role="img" aria-hidden="true">
     <defs>

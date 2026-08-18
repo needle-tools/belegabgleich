@@ -72,7 +72,7 @@
           target="_blank"
           rel="noopener noreferrer"
           onclick={(e) => { e.preventDefault(); openBeleg(url!); }}
-          use:tooltip={`Rechnungen bei ${provider} herunterladen (öffnet die Belegseite im Popup)`}
+          use:tooltip={`Rechnungen bei ${provider} herunterladen (öffnet die Belegseite in einem neuen Tab)`}
         >
           Beleg holen
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>

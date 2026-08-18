@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
-   * Per-charge "Beleg zuordnen" overlay (like kaktus-muehle): shows the booking,
-   * lets the user open the vendor's billing page in a popup to download the
-   * invoice, then drop it right here. The dropped PDF is added to the source pool
+   * Per-charge "Beleg zuordnen" overlay: shows the booking, lets the user open the
+   * vendor's billing page in a new tab to download the invoice, then drop it right
+   * here. The dropped PDF is added to the source pool
    * and the whole abgleich re-runs — matchStatement links it to this booking by
    * amount, so the row flips to "Beleg da". Everything stays local.
    */
@@ -15,6 +15,7 @@
     entry,
     onload,
     onclose,
+    onprepare,
     live = true,
     loadError = "",
     targetLabel = "",
@@ -27,6 +28,10 @@
     entry: ReportEntry;
     onload: (pdfs: CollectedPdf[], entry: ReportEntry) => Promise<RunResult | null> | void;
     onclose: () => void;
+    /** Called on the gesture that supplies a file (drop, or opening the file
+     *  dialog) — the parent uses it to ask for folder write access while the
+     *  browser still counts this as a user action. */
+    onprepare?: () => void;
     /** false when the report is still showing demo data (no real statement loaded). */
     live?: boolean;
     /** the App's last load error, shown when a re-run yields no result. */
@@ -101,6 +106,7 @@
     dragging = false;
     depth = 0;
     if (busy) return;
+    onprepare?.(); // before any await — the drop is what still counts as the gesture
     if (e.dataTransfer) emit(await collectFromDataTransfer(e.dataTransfer));
   }
   async function onFiles(e: Event) {
@@ -108,11 +114,24 @@
     if (input.files) emit(await collectFromFileList(input.files));
     input.value = "";
   }
+  /** Click / Enter on the dropzone: open the file dialog, and take the same gesture
+   *  to ask for write access — a file is on its way in. */
+  function choose() {
+    if (working) return;
+    onprepare?.();
+    fileInput.click();
+  }
 </script>
 
 <svelte:window onkeydown={(e) => { if (e.key === "Escape") onclose(); }} />
 
-<div class="backdrop">
+<!-- Click outside closes, like every other overlay on the web. Only a click that
+     lands on the backdrop itself — never one that bubbled up out of the dialog. -->
+<div
+  class="backdrop"
+  role="presentation"
+  onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
+>
   <div
     class="modal"
     role="dialog"
@@ -174,8 +193,8 @@
       role="button"
       tabindex="0"
       aria-busy={working}
-      onclick={() => { if (!working) fileInput.click(); }}
-      onkeydown={(e) => { if (!working && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fileInput.click(); } }}
+      onclick={choose}
+      onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(); } }}
       ondrop={onDrop}
       ondragover={(e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; }}
       ondragenter={(e) => { e.preventDefault(); if (working) return; depth++; dragging = true; }}
