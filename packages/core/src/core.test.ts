@@ -252,9 +252,18 @@ test("buildProposed: no invoice number → just <Company>-<date>", () => {
     .toBe("GitHub-2025-09-21.pdf");
 });
 
-test("buildProposed: missing date falls back to nodate", () => {
+test("buildProposed refuses to rename what it did not understand", () => {
+  // Renaming is destructive — the vendor's own name may be the only place the date or
+  // the number survives. No date, no amount, no proposal.
   expect(buildProposed({ provider: "IKEA", date: "", doc_type: "invoice", invoice_number: "", currency: "EUR", total: "32.97" }))
-    .toBe("IKEA-nodate.pdf");
+    .toBe("");
+  expect(buildProposed({ provider: "IKEA", date: "2026-03-04", doc_type: "invoice", invoice_number: "", currency: "EUR", total: "" }))
+    .toBe("");
+  expect(buildProposed({ provider: "IKEA", date: "2026-03-04", doc_type: "invoice", invoice_number: "", currency: "EUR", total: "0" }))
+    .toBe("");
+  // …and with both in hand it proposes as before.
+  expect(buildProposed({ provider: "IKEA", date: "2026-03-04", doc_type: "invoice", invoice_number: "", currency: "EUR", total: "32.97" }))
+    .toBe("IKEA-2026-03-04.pdf");
 });
 
 test("buildProposed returns no suggestion when the provider is unknown", () => {
@@ -274,6 +283,30 @@ test("targetPath: zip entry is extracted next to the .zip", () => {
     .toBe("C:\\root\\sub\\new.pdf");
   expect(targetPath("/root", { kind: "zip", zip: "arch.zip", entry: "x.pdf" }, "new.pdf", "/"))
     .toBe("/root/new.pdf");
+});
+
+test("extractFields joins an invoice number split across a column gap", () => {
+  // "Invoice number ABC12345   1485" is one number printed in two columns. Keeping
+  // only "ABC12345" gave every invoice from that vendor the same number, and the
+  // duplicate detector then declared ninety documents to be one.
+  const a = extractFields("Muster GmbH\nInvoice number MUS17ABC   1485\nInvoice Date Apr 22, 2026\nTotal €16.05");
+  expect(a.fields.invoice_number).toBe("MUS17ABC-1485");
+  const b = extractFields("Muster GmbH\nInvoice number MUS17ABC   1486\nInvoice Date Apr 23, 2026\nTotal €16.05");
+  expect(b.fields.invoice_number).toBe("MUS17ABC-1486");
+  // A number that already ends in a digit is complete; what follows is a year, a
+  // customer number, the next column — not the rest of it.
+  expect(extractFields("Rechnungsnummer: 12345   2026\nGesamtbetrag 10,00 €").fields.invoice_number).toBe("12345");
+  // …and an ordinary number is untouched.
+  expect(extractFields("Invoice number  ABC-001\nTotal $1.00").fields.invoice_number).toBe("ABC-001");
+});
+
+test("findDuplicates needs the date to agree too, not just the number", () => {
+  // Same vendor, same amount, same (half-read) number, different days: three separate
+  // invoices, not one filed three times.
+  const rows = ["2026-04-06", "2026-04-07", "2026-04-08"].map((date, i) =>
+    row({ provider: "Muster", total: "1.00", date, invoice_number: "ABC12345", rel: `04/x${i}.pdf` }),
+  );
+  expect(findDuplicates(rows)).toEqual([]);
 });
 
 test("findDuplicates spots one invoice filed into two month folders", () => {

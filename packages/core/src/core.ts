@@ -138,14 +138,23 @@ export function slug(s: string): string {
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 
-// Filename schema: <Company>-<YYYY-MM-DD>[-<invoice#>].pdf
+/**
+ * Filename schema: `<Company>-<YYYY-MM-DD>[-<invoice#>].pdf`, or "" when we have no
+ * business renaming the file.
+ *
+ * Renaming is destructive: the old name often carries the date or the number that we
+ * failed to read, and once it's gone it's gone. So a proposal requires all three of
+ * issuer, a real date and an amount — the amount doesn't even appear in the name, but
+ * failing to find it means we did not understand the document, and "Provider-nodate.pdf"
+ * is a worse name than whatever the vendor called it.
+ */
 export function buildProposed(f: Fields): string {
   const provider = canon(f.provider);
-  // If we couldn't identify the issuer the extraction effectively failed —
-  // don't offer a meaningless "Unknown-…" name; the UI shows no suggestion.
   if (provider === "Unknown") return "";
-  const date = ISO.test(f.date) ? f.date : f.date || "nodate";
-  const parts = [provider, date];
+  if (!ISO.test(f.date)) return "";
+  const total = parseFloat(f.total);
+  if (!isFinite(total) || total <= 0) return "";
+  const parts = [provider, f.date];
   const num = slug(f.invoice_number);
   if (num) parts.push(num);
   return parts.join("-") + ".pdf";
@@ -331,7 +340,16 @@ function findCarriedAmounts(lines: string[], total: number | null): number[] {
   return out;
 }
 
-const INV_RX = /(?:rechnungs?-?\s*(?:nummer|nr)\.?|invoice\s*(?:number|no|#)\.?|beleg-?\s*(?:nummer|nr)\.?|rg-?\s*nr\.?|document\s*(?:number|no)\.?|receipt\s*(?:number|no)\.?|order\s*(?:number|no|#)\.?|facture\s*(?:n[o°]|#)?|ref(?:erence)?\.?\s*(?:no|number|#)?)\s*[:#.]?\s*([A-Za-z0-9][A-Za-z0-9/_.\-]{1,40})/i;
+/**
+ * Invoice number after its label. The second group catches a number the PDF prints
+ * across a column gap — "Invoice number BED17AAB   1485" is ONE number, and keeping
+ * only the first half gives every invoice from that vendor the same "BED17AAB", which
+ * then reads as one document filed ninety times.
+ *
+ * The halves are only joined when the first ends in a non-digit (see extractFields):
+ * "Rechnungsnummer 12345   2026" is a number followed by a year, not a split number.
+ */
+const INV_RX = /(?:rechnungs?-?\s*(?:nummer|nr)\.?|invoice\s*(?:number|no|#)\.?|beleg-?\s*(?:nummer|nr)\.?|rg-?\s*nr\.?|document\s*(?:number|no)\.?|receipt\s*(?:number|no)\.?|order\s*(?:number|no|#)\.?|facture\s*(?:n[o°]|#)?|ref(?:erence)?\.?\s*(?:no|number|#)?)\s*[:#.]?\s*([A-Za-z0-9][A-Za-z0-9/_.\-]{1,40})(?:[ \t]{1,8}(\d{2,10})(?![\d.,]))?/i;
 const DATE_STRONG = /(rechnungsdatum|datum der rechnung|rechnung vom|invoice date|bill date|date of issue|date paid|belegdatum|ausstellungsdatum|issued on|issue date|date de facture|fecha)\s*[:#]?\s*([^\n]{0,28})/i;
 const DATE_WEAK = /\b(datum|date|vom)\b\s*[:#]?\s*([^\n]{0,28})/i;
 
@@ -432,6 +450,8 @@ export function extractFields(text: string, customer = ""): Extraction {
 
   const invM = INV_RX.exec(text);
   let invoice_number = invM ? invM[1].replace(/[.,;:]+$/, "") : "";
+  // Second half of a number split across columns (see INV_RX).
+  if (invM?.[2] && !/\d$/.test(invoice_number)) invoice_number = `${invoice_number}-${invM[2]}`;
   // Reject digit-less captures — these are label fragments (e.g. "IN" grabbed from
   // "Invoice number IN…"), never real invoice numbers, which always carry a digit.
   if (invoice_number && !/\d/.test(invoice_number)) invoice_number = "";
@@ -499,7 +519,10 @@ export function documentKey(f: Pick<Fields, "provider" | "date" | "total" | "inv
   if (!provider || provider === "Unknown" || !isFinite(total) || total <= 0) return "";
   const num = slug(f.invoice_number).toLowerCase();
   if (!num && !ISO.test(f.date)) return "";
-  return `${provider}|${total.toFixed(2)}|${num || f.date}`;
+  // BOTH, not either: an invoice number we read only half of is shared by every
+  // invoice that vendor ever issued, and using it in place of the date declared
+  // ninety different documents to be one.
+  return `${provider}|${total.toFixed(2)}|${num}|${f.date}`;
 }
 
 /**

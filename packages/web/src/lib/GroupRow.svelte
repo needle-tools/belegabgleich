@@ -69,9 +69,11 @@
   const invoices = $derived([
     ...new Set(group.items.map((i) => i.invoice).filter((v): v is string => !!v)),
   ]);
+  // Tooltips keep newlines, so several Belege list one per line rather than running
+  // together behind separators.
   const nameTip = $derived(
     invoices.length
-      ? { text: `${provider} · ${invoices.join(" · ")}` }
+      ? { text: [provider, ...invoices].join("\n") }
       : { text: provider, truncatedOnly: true },
   );
 </script>

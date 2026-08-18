@@ -126,18 +126,22 @@ a {
      renders behind the thing it explains is worse than no tooltip. It is appended to
      <body> and never takes pointer events, so being topmost is always correct. */
   z-index: 300;
-  max-width: 320px;
-  padding: 6px 10px;
+  max-width: 380px;
+  padding: 7px 11px;
   border-radius: 8px;
   background: var(--text-primary);
   color: var(--text-inverse);
   font-family: var(--font-family-body);
   font-size: 0.8rem;
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 1.45;
   box-shadow: var(--shadow-panel);
   pointer-events: none;
-  white-space: normal;
+  /* Tooltips that list things (every path a duplicate was found at, every document in
+     a group) pass their items separated by newlines. `normal` collapsed them into one
+     run of text, which is precisely the case where the list needed reading line by
+     line; `pre-line` keeps the breaks and still wraps long lines. */
+  white-space: pre-line;
   overflow-wrap: anywhere;
   animation: tooltip-in 0.12s ease;
 }

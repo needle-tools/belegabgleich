@@ -12,7 +12,7 @@
    * is the only way to know which month you forgot.
    */
   import { collectFromDataTransfer, collectFromFileList, type CollectedPdf } from "./collect";
-  import { openBeleg } from "./openBeleg";
+  import { openBeleg, openMode, setOpenMode, type OpenMode } from "./openBeleg";
   import { money, dDate, invoicePortalsFor, type ReportEntry } from "./report";
   import { tooltip } from "./tooltip";
   import type { ExtraInvoice, RunResult } from "./engine";
@@ -80,6 +80,13 @@
   // Vendors that bill through several portals get one button each; with a single
   // portal the header keeps its plain "Quelle öffnen" shortcut.
   const url = $derived(portals.length === 1 ? portals[0].url : undefined);
+
+  /** Tab or separate window for the vendor page — remembered between visits. */
+  let mode = $state<OpenMode>(openMode());
+  function toggleMode(next: boolean) {
+    mode = next ? "window" : "tab";
+    setOpenMode(mode);
+  }
 
   let dragging = $state(false);
   let depth = 0;
@@ -220,7 +227,7 @@
     <header class="modal-head">
       <h2>{group ? "Belege zuordnen" : "Beleg zuordnen"} · {lead.provider}</h2>
       {#if url}
-        <button type="button" class="ghost" onclick={() => openBeleg(url)}>
+        <button type="button" class="ghost" onclick={() => openBeleg(url, mode)}>
           Quelle öffnen
           <svg class="ext" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
         </button>
@@ -283,7 +290,7 @@
         <p>{lead.provider} rechnet über mehrere Portale ab — der Auszug verrät nicht, welches. Öffne das passende und lege die Rechnungen unten ab.</p>
         <div class="portals">
           {#each portals as p (p.url)}
-            <button type="button" class="ghost" onclick={() => openBeleg(p.url)}>
+            <button type="button" class="ghost" onclick={() => openBeleg(p.url, mode)}>
               {p.label}
               <svg class="ext" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
             </button>
@@ -294,12 +301,18 @@
           Bei {lead.provider} herunterladen und unten ablegen. Mehrere Dateien können
           auch auf einmal abgelegt werden.
         </p>
-        <button type="button" class="primary" onclick={() => openBeleg(portals[0].url)}>
+        <button type="button" class="primary" onclick={() => openBeleg(portals[0].url, mode)}>
           {group ? "Rechnungen" : "Rechnung"} bei {lead.provider} herunterladen
           <svg class="ext" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3L4 12" /></svg>
         </button>
       {:else}
         <p>Für {lead.provider} ist kein Download-Link hinterlegt — lade die {group ? "Rechnungen" : "Rechnung"} manuell herunter und lege sie unten ab.</p>
+      {/if}
+      {#if portals.length}
+        <label class="open-mode" use:tooltip={"Ein eigenes Fenster liegt neben Belegabgleich, statt es zu verdecken — hat in Chrome aber keinen Zurück-Button. Ein Tab kann zurück navigieren (Amazon: Bestellungen → Rechnung → zurück)."}>
+          <input type="checkbox" checked={mode === "window"} onchange={(e) => toggleMode(e.currentTarget.checked)} />
+          In eigenem Fenster öffnen (statt im Tab)
+        </label>
       {/if}
     </section>
 
@@ -715,6 +728,23 @@
   }
 
   .portals { display: flex; flex-wrap: wrap; gap: 8px; }
+  /* The choice sits under the button it changes, quiet enough to ignore. */
+  .open-mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 9px;
+    color: var(--text-muted);
+    font-size: 0.79rem;
+    cursor: pointer;
+  }
+  .open-mode input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--accent-brand-deep);
+    cursor: pointer;
+  }
 
   .block { margin-bottom: 16px; }
   .block h3 { font-size: 0.98rem; font-weight: 700; margin-bottom: 6px; }

@@ -63,15 +63,25 @@
 
   // A Beleg linked via exchange rate carries a note saying so — surface it, since
   // the amounts on screen (18,15 €) and in the PDF (20 $) won't look alike.
-  const matchedTip = $derived(
-    [
-      entry.invoice ? `Zugeordneter Beleg: ${entry.invoice}` : "Ein passender Beleg wurde gefunden",
+  const matchedTip = $derived.by(() => {
+    const rels = (entry.invoice ?? "").split(", ").filter(Boolean);
+    // Tooltips keep newlines, so a booking covered by several Belege lists them one
+    // per line instead of running them together behind commas.
+    const nl = "\n";
+    const head =
+      rels.length > 1
+        ? `Zugeordnete Belege:${nl}${rels.join(nl)}`
+        : rels.length === 1
+          ? `Zugeordneter Beleg: ${rels[0]}`
+          : "Ein passender Beleg wurde gefunden";
+    return [
+      head,
       entry.manual ? "Von dir zugeordnet — nicht automatisch über Betrag und Datum gefunden" : "",
       entry.note,
     ]
       .filter(Boolean)
-      .join(" · "),
-  );
+      .join(nl);
+  });
 
   // "Beleg holen": open the assign picker. The vendor page is opened only when the
   // user clicks "herunterladen" inside it — a direct gesture, so it's never blocked.
