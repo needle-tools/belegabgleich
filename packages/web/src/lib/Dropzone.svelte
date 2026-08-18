@@ -20,6 +20,7 @@
     errorMsg = "",
     awaitingDemo = false,
     onremove,
+    onremovemany,
     notice = "",
     sortable = 0,
     sortTargets = [],
@@ -43,6 +44,8 @@
     onreset?: () => void;
     /** Drop a single loaded document (by display path) from the report. */
     onremove?: (rel: string) => void;
+    /** Drop a whole folder's documents in one go — one re-match, not one per file. */
+    onremovemany?: (rels: string[]) => void;
     busy?: boolean;
     progress?: RunProgress | null;
     result?: RunResult | null;
@@ -76,6 +79,51 @@
 
   /** Remove one document; the parent re-assembles the report without it. */
   const remove = (rel: string) => onremove?.(rel);
+
+  /**
+   * The same statements, grouped by the folder they came from.
+   *
+   * A year of statements is twenty-odd cards, and read as a flat list they are
+   * indistinguishable: every name starts with the same account number, and the part
+   * that tells them apart (month, cardholder) is exactly what gets truncated. Grouped
+   * by folder, the folder answers "which month" and the list becomes scannable.
+   */
+  const sourceGroups = $derived.by(() => {
+    const dirOf = (rel: string) => {
+      const parts = rel.split(/[/\\]/);
+      parts.pop();
+      return parts.join("/");
+    };
+    const byDir = new Map<string, typeof statementList>();
+    for (const s of statementList) byDir.set(dirOf(s.rel), [...(byDir.get(dirOf(s.rel)) ?? []), s]);
+    const paths = [...byDir.keys()].sort((a, b) => a.localeCompare(b, "de", { numeric: true }));
+    // Every folder under one picked root repeats that root's name; drop it from the
+    // heading (the full path stays in the title) so "04" reads as "04".
+    const head = (p: string) => p.split("/")[0];
+    const sharedRoot =
+      paths.length > 1 && paths.every((p) => p.includes("/") && head(p) === head(paths[0]));
+    return paths.map((path) => ({
+      path,
+      name: (sharedRoot ? path.slice(head(path).length + 1) : path) || "Hauptordner",
+      items: byDir.get(path)!,
+    }));
+  });
+  /** Only label folders when there is more than one to tell apart. */
+  const manyFolders = $derived(sourceGroups.length > 1);
+  /** Past a screenful, the list scrolls instead of pushing the buttons off-screen. */
+  const sourcesScroll = $derived(statementList.length > 6);
+
+  /**
+   * "1234_6073_ABRECHNUNG_2026-04-18_Mustermann.pdf" → "1234_6073_ABR…18_Mustermann.pdf".
+   * Bank exports front-load the noise, so cutting only the tail throws away the one
+   * part that identifies the document.
+   */
+  function shortName(rel: string, max = 30): string {
+    const name = baseName(rel);
+    if (name.length <= max) return name;
+    const tail = Math.ceil((max - 1) * 0.55);
+    return `${name.slice(0, max - 1 - tail)}…${name.slice(-tail)}`;
+  }
 
   // Collecting (folder scan / reading bytes) happens here before the engine runs;
   // `busy`/`progress` (from the parent) cover the subsequent reading phase.
@@ -187,29 +235,52 @@
 
       <!-- Which files are actually in this report — at the top level, not behind
            a disclosure. Loading a second file has to visibly add a row. -->
-      <ul class="dz-sources">
-        {#each statementList as s (s.rel)}
-          <li>
-            <svg class="dz-source-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5l-3.5-3.5Z" />
-              <path d="M9.5 1.5V5H13" />
-            </svg>
-            <span class="dz-source-name" title={s.rel}>{baseName(s.rel)}</span>
-            <span class="dz-pill stmt">{s.label}</span>
-            {#if onremove && s.removable}
-              <button
-                type="button"
-                class="dz-remove"
-                onclick={() => remove(s.rel)}
-                aria-label={`${baseName(s.rel)} entfernen`}
-                use:tooltip={"Diesen Auszug und seine Buchungen aus dem Bericht entfernen"}
-              >
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
-              </button>
-            {/if}
-          </li>
+      <div class="dz-sources-wrap" class:scrolls={sourcesScroll}>
+        {#each sourceGroups as g (g.path)}
+          {#if manyFolders}
+            <p class="dz-folder" title={g.path}>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 2H14V13H2z" /></svg>
+              <span class="dz-folder-name">Ordner: {g.name}</span>
+              {#if onremovemany && g.items.some((s) => s.removable)}
+                <!-- A whole month at once: loading a year and then pruning it file by
+                     file is twenty clicks. Nothing on disk is touched. -->
+                <button
+                  type="button"
+                  class="dz-remove"
+                  onclick={() => onremovemany?.(g.items.filter((s) => s.removable).map((s) => s.rel))}
+                  aria-label={`Ordner ${g.name} entfernen`}
+                  use:tooltip={`Alle ${g.items.length} Auszüge aus „${g.name}" und ihre Buchungen aus dem Bericht entfernen — die Dateien selbst bleiben unangetastet`}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                </button>
+              {/if}
+            </p>
+          {/if}
+          <ul class="dz-sources">
+            {#each g.items as s (s.rel)}
+              <li>
+                <svg class="dz-source-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5l-3.5-3.5Z" />
+                  <path d="M9.5 1.5V5H13" />
+                </svg>
+                <span class="dz-source-name" use:tooltip={s.rel}>{shortName(s.rel)}</span>
+                <span class="dz-pill stmt">{s.label}</span>
+                {#if onremove && s.removable}
+                  <button
+                    type="button"
+                    class="dz-remove"
+                    onclick={() => remove(s.rel)}
+                    aria-label={`${baseName(s.rel)} entfernen`}
+                    use:tooltip={"Diesen Auszug und seine Buchungen aus dem Bericht entfernen"}
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                  </button>
+                {/if}
+              </li>
+            {/each}
+          </ul>
         {/each}
-      </ul>
+      </div>
 
       <p class="dz-sub">
         {summary.total}
@@ -612,13 +683,58 @@
   /* The loaded statements, one row per file. Deliberately the widest, most
      concrete thing in the success state — "did it read both?" is the first
      question people have. */
+  /* Twenty statements would otherwise push the buttons below the fold, so past a
+     screenful the list scrolls in place. */
+  .dz-sources-wrap {
+    width: min(100%, 520px);
+    margin: 2px 0;
+    text-align: left;
+  }
+  .dz-sources-wrap.scrolls {
+    max-height: 46vh;
+    overflow-y: auto;
+    padding-right: 8px;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
+  }
+  /* The folder is the heading, because with a year of statements it's the folder that
+     answers "which month is this one". Sticky, so it stays answering while you scroll. */
+  .dz-folder {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 10px 0 4px;
+    padding: 2px 0;
+    background: var(--surface-callout-success);
+    color: var(--text-secondary);
+    font-size: var(--type-micro-label-size);
+    font-weight: var(--type-micro-label-weight);
+    letter-spacing: 0.01em;
+  }
+  .dz-sources-wrap > .dz-folder:first-child { margin-top: 2px; }
+  .dz-folder svg {
+    width: 13px;
+    height: 13px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.4;
+    stroke-linejoin: round;
+  }
+  .dz-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The folder's own remove sits at the end of its heading, like the file rows'. */
+  .dz-folder .dz-remove { margin-left: auto; width: 22px; height: 22px; }
+  .dz-folder:hover .dz-remove, .dz-folder .dz-remove:focus-visible { opacity: 1; }
   .dz-sources {
     list-style: none;
     display: flex;
     flex-direction: column;
     gap: 6px;
-    width: min(100%, 420px);
-    margin: 2px 0;
+    width: 100%;
+    margin: 0;
     padding: 0;
     text-align: left;
   }

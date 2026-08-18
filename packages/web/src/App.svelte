@@ -785,6 +785,30 @@
     saveSession(next);
   }
 
+  /**
+   * Remove several loaded documents at once (a whole folder), in ONE re-assemble.
+   * Removing them one call at a time would have each call read the same `result` and
+   * only the last write would survive — nine files removed, one actually gone.
+   */
+  async function onRemoveMany(rels: string[]) {
+    if (!result || !rels.length) return;
+    const { removeDocument } = await import("./lib/engine");
+    let next: RunResult | null = result;
+    for (const rel of rels) {
+      if (!next) break;
+      next = removeDocument(next, rel);
+    }
+    const gone = new Set(rels);
+    sources = sources.filter((p) => !gone.has(p.rel));
+    if (!next) {
+      reset(); // that was the last statement — nothing left to reconcile against
+      return;
+    }
+    result = next;
+    saveSession(next);
+    notify(`${rels.length} ${rels.length === 1 ? "Dokument" : "Dokumente"} entfernt`);
+  }
+
   function reset() {
     result = null;
     errorMsg = "";
@@ -980,6 +1004,7 @@
       onload={onLoad}
       onreset={reset}
       onremove={onRemove}
+      onremovemany={onRemoveMany}
       {busy}
       {progress}
       {result}
