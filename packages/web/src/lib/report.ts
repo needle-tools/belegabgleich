@@ -107,6 +107,9 @@ export type ReportEntry = {
    *  "whose statement is this gap on?" is otherwise unanswerable without going
    *  back to the PDFs. */
   source?: { rel: string; label: string };
+  /** The link was drawn by hand, not found by the matcher — worth showing, since
+   *  "Beleg da" then rests on the user's judgement rather than on an equal total. */
+  manual?: true;
 };
 
 /**
@@ -255,8 +258,9 @@ export function buildReport(
     return src ? { source: src } : {};
   };
 
-  for (const { charge, rows, fx } of match.matched) {
+  for (const { charge, rows, fx, manual } of match.matched) {
     entries.push({
+      ...(manual ? { manual: true as const } : {}),
       provider: canon(charge.merchant),
       date: charge.date,
       amount: charge.amount,

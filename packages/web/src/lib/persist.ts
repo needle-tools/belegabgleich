@@ -54,6 +54,9 @@ function toStorable(result: RunResult): RunResult {
     emptyPdfs: result.emptyPdfs,
     extras: result.extras ?? [],
     duplicates: result.duplicates ?? [],
+    // The user's own decisions — the one part of the report that cannot be
+    // recomputed, so it has to come back after a reload.
+    manualLinks: result.manualLinks ?? [],
     renames: [], // bytes/handles can't survive the clone; recomputed on next run
     charges: result.charges,
     invoices: result.invoices.map((i) => ({ row: i.row })), // strip pdf bytes/handle

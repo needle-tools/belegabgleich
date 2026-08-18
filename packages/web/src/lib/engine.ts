@@ -10,7 +10,9 @@ import {
   matchStatement,
   dedupeCharges,
   findDuplicates,
+  chargeKey,
   type Charge,
+  type ManualLink,
   type Row,
 } from "@kah/core";
 import { parseBankStatement } from "@kah/parsers";
@@ -64,6 +66,9 @@ export type RunResult = {
   extras: ExtraInvoice[];
   /** The same invoice filed in more than one place, grouped per document. */
   duplicates: DuplicateGroup[];
+  /** Links the user drew by hand. Kept on the result so they survive a reload and
+   *  every later re-match — dropping them would silently undo the user's decision. */
+  manualLinks: ManualLink[];
   /** Invoices that can be renamed to the canonical schema (current ≠ proposed). */
   renames: RenamePlan[];
   /** Deduped statement charges — retained so a later invoice can be re-matched
@@ -222,10 +227,11 @@ function assemble(
   parserIds: string[],
   emptyPdfs: string[],
   statementSources?: StatementSource[],
+  manualLinks: ManualLink[] = [],
 ): RunResult {
   const deduped = dedupeCharges(charges);
   const rows = invoices.map((i) => i.row);
-  const match = matchStatement(deduped, rows);
+  const match = matchStatement(deduped, rows, manualLinks);
 
   // Which statement each charge came from, by object identity — dedupeCharges keeps
   // the first occurrence, so the charge objects here are the ones the sources hold.
@@ -268,6 +274,7 @@ function assemble(
       total: r.total,
       currency: r.currency,
     })),
+    manualLinks,
     duplicates: findDuplicates(rows).map((g) => ({
       provider: g[0].provider,
       date: g[0].date,
@@ -297,6 +304,7 @@ function fromSources(
   sources: StatementSource[],
   invoices: InvoiceItem[],
   emptyPdfs: string[],
+  manualLinks: ManualLink[] = [],
 ): RunResult {
   return assemble(
     sources.flatMap((s) => s.charges),
@@ -306,6 +314,7 @@ function fromSources(
     [...new Set(sources.map((s) => s.parserId))],
     emptyPdfs,
     sources,
+    manualLinks,
   );
 }
 
@@ -328,9 +337,52 @@ export function removeDocument(prev: RunResult, rel: string): RunResult | null {
   const sources = (prev.statementSources ?? []).filter((s) => s.rel !== rel);
   const invoices = (prev.invoices ?? []).filter((i) => i.row.rel !== rel);
   const emptyPdfs = (prev.emptyPdfs ?? []).filter((e) => e !== rel);
+  // A hand-drawn link to a document that is gone has nothing left to say.
+  const links = (prev.manualLinks ?? []).filter((l) => l.rel !== rel);
 
   if (!sources.length) return null;
-  return fromSources(sources, invoices, emptyPdfs);
+  return fromSources(sources, invoices, emptyPdfs, links);
+}
+
+/**
+ * Record "this Beleg belongs to this booking" and re-match with it in force.
+ *
+ * The way out when the matcher is wrong, which it will sometimes be: it links on the
+ * amount, so an invoice whose total the PDF states differently (a partial payment, a
+ * figure we misread, a credit applied) can never be linked automatically, however
+ * obvious the pairing is to the person looking at both.
+ */
+export function linkManually(prev: RunResult, entry: ReportEntry, rel: string): RunResult {
+  configureProviderAliases();
+  const charge = (prev.charges ?? []).find(
+    (c) => c.date === entry.date && Math.abs(c.amount - entry.amount) <= 0.01 && c.merchant === entry.merchant,
+  );
+  if (!charge) {
+    console.warn("[link] Buchung nicht mehr im Bericht gefunden — nichts verknüpft");
+    return prev;
+  }
+  const key = chargeKey(charge);
+  // One Beleg per booking, and one booking per Beleg: replace whatever either side
+  // was linked to before rather than stacking contradictory links.
+  const links = [
+    ...(prev.manualLinks ?? []).filter((l) => l.charge !== key && l.rel !== rel),
+    { charge: key, rel },
+  ];
+  const sources = prev.statementSources;
+  if (!sources) {
+    console.warn("[link] Sitzung ohne Auszug-Zuordnung — manuelles Verknüpfen nicht möglich");
+    return prev;
+  }
+  return fromSources(sources, prev.invoices ?? [], prev.emptyPdfs ?? [], links);
+}
+
+/** Take back a hand-drawn link (by the Beleg it points at). */
+export function unlinkManually(prev: RunResult, rel: string): RunResult {
+  configureProviderAliases();
+  const links = (prev.manualLinks ?? []).filter((l) => l.rel !== rel);
+  const sources = prev.statementSources;
+  if (!sources) return prev;
+  return fromSources(sources, prev.invoices ?? [], prev.emptyPdfs ?? [], links);
 }
 
 /**
@@ -389,7 +441,8 @@ export function addParsed(prev: RunResult, parsed: ParsedInput): RunResult {
   }
   for (const rel of parsed.emptyPdfs) if (!emptyPdfs.includes(rel)) emptyPdfs.push(rel);
 
-  if (sources) return fromSources(sources, invoices, emptyPdfs);
+  const links = prev.manualLinks ?? [];
+  if (sources) return fromSources(sources, invoices, emptyPdfs, links);
   return assemble(
     legacyCharges,
     invoices,
@@ -397,5 +450,7 @@ export function addParsed(prev: RunResult, parsed: ParsedInput): RunResult {
     legacyFiles,
     [...legacyParsers],
     emptyPdfs,
+    undefined,
+    links,
   );
 }

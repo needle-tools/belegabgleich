@@ -14,7 +14,8 @@
   import { collectFromDataTransfer, collectFromFileList, type CollectedPdf } from "./collect";
   import { openBeleg } from "./openBeleg";
   import { money, dDate, invoicePortalsFor, type ReportEntry } from "./report";
-  import type { RunResult } from "./engine";
+  import { tooltip } from "./tooltip";
+  import type { ExtraInvoice, RunResult } from "./engine";
 
   let {
     entries,
@@ -29,6 +30,8 @@
     denied = false,
     note = "",
     onundo,
+    orphans = [],
+    onlink,
   }: {
     /** The bookings this dialog is about: one row, or a whole vendor group. */
     entries: ReportEntry[];
@@ -55,6 +58,11 @@
     /** Delete the files this drop just wrote and undo its effect on the report.
      *  Absent when nothing was written — then there is nothing to take back. */
     onundo?: () => Promise<boolean>;
+    /** Belege in the folder that no booking claimed, closest first — candidates for
+     *  a link the matcher couldn't make. */
+    orphans?: ExtraInvoice[];
+    /** Link one of those to this booking by hand. Returns the re-matched report. */
+    onlink?: (entry: ReportEntry, rel: string) => Promise<RunResult | null>;
   } = $props();
 
   /** The booking that stands for the set: oldest still-open one, else the first.
@@ -73,11 +81,12 @@
   let dragging = $state(false);
   let depth = 0;
   let busy = $state(false);
-  let feedback = $state<null | { kind: "matched" | "nomatch" | "empty" | "error"; invoice?: string }>(null);
+  let feedback = $state<null | { kind: "matched" | "manual" | "nomatch" | "empty" | "error"; invoice?: string }>(null);
   /** Per-booking outcome of the last drop, keyed like the list is rendered. Empty
    *  until something has been dropped. */
   let covered = $state<Map<string, string | null>>(new Map());
   const keyOf = (e: ReportEntry, i: number) => `${e.date}|${e.amount}|${i}`;
+  const baseName = (rel: string) => rel.split(/[/\\]|\s›\s/).pop() ?? rel;
   let fileInput: HTMLInputElement;
   /** null = nothing taken back yet; "done"/"failed" = outcome of the last try. */
   let undone = $state<null | "done" | "failed">(null);
@@ -122,6 +131,20 @@
     const hits = [...next.values()].filter((v) => v !== null).length;
     feedback = hits > 0 ? { kind: "matched", invoice: next.get(keyOf(lead, entries.indexOf(lead))) ?? "" } : { kind: "nomatch" };
   }
+  /** Assign one of the unclaimed Belege to this booking by hand. */
+  let linking = $state("");
+  async function link(rel: string) {
+    if (!onlink || working || linking) return;
+    linking = rel;
+    const res = await onlink(lead, rel);
+    linking = "";
+    if (!res) { feedback = { kind: "error" }; return; }
+    const next = new Map<string, string | null>();
+    entries.forEach((e, i) => next.set(keyOf(e, i), assignedInvoice(res, e)));
+    covered = next;
+    feedback = { kind: "manual", invoice: rel };
+  }
+
   /** How many of the bookings in this dialog are covered now. */
   const coveredCount = $derived(
     entries.filter((e, i) => e.status === "matched" || covered.get(keyOf(e, i)) != null).length,
@@ -306,7 +329,7 @@
     {/if}
 
     {#if feedback}
-      <div class="fb" class:ok={feedback.kind === "matched"} class:warn={feedback.kind === "nomatch" || feedback.kind === "empty"} class:err={feedback.kind === "error"} role="status">
+      <div class="fb" class:ok={feedback.kind === "matched" || feedback.kind === "manual"} class:warn={feedback.kind === "nomatch" || feedback.kind === "empty"} class:err={feedback.kind === "error"} role="status">
         {#if feedback.kind === "matched"}
           <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
           <div>
@@ -333,6 +356,16 @@
                    next to "Heroku _ Invoice.pdf" just looks broken. -->
               <span class="fb-sub">Nur im Bericht: {feedback.invoice} — die Datei bleibt liegen, wo sie ist, und behält ihren Namen.</span>
             {/if}
+          </div>
+        {:else if feedback.kind === "manual"}
+          <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
+          <div>
+            <strong>Von dir zugeordnet.</strong>
+            <span class="fb-sub">
+              {baseName(feedback.invoice ?? "")} gehört jetzt zu dieser Buchung — im
+              Bericht als „manuell" gekennzeichnet, und die Zuordnung bleibt auch nach
+              einem Neuladen bestehen.
+            </span>
           </div>
         {:else if feedback.kind === "nomatch"}
           <svg class="fb-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4v5M8 11.5v.5" /></svg>
@@ -365,6 +398,36 @@
           </div>
         {/if}
       </div>
+    {/if}
+
+    {#if onlink && !group && orphans.length && lead.status === "missing" && covered.get(keyOf(lead, entries.indexOf(lead))) == null}
+      <!-- The way out when the matcher can't see it. It links on the amount, so a
+           Beleg whose PDF states a different total — partial payment, credit applied,
+           a figure we read wrong — will never match on its own, however obvious the
+           pairing is to you. -->
+      <section class="orphans">
+        <h3>Beleg liegt schon da, passt aber nicht automatisch?</h3>
+        <p>
+          Diese Belege im Ordner gehören zu keiner Buchung. Wenn einer zu
+          {money(lead.amount, lead.currency)} vom {dDate(lead.date)} gehört, ordne ihn
+          von Hand zu — deine Zuordnung bleibt bestehen, auch nach einem Neuladen.
+        </p>
+        <ul>
+          {#each orphans as o (o.rel)}
+            <li>
+              <span class="orphan-doc">
+                {o.provider === "Unknown" ? "Anbieter unklar" : o.provider} ·
+                {o.date ? dDate(o.date) : "ohne Datum"} ·
+                {isFinite(parseFloat(o.total)) ? money(parseFloat(o.total), o.currency || "EUR") : "Betrag unklar"}
+              </span>
+              <span class="orphan-file" use:tooltip={o.rel}>{baseName(o.rel)}</span>
+              <button type="button" class="ghost small" disabled={!!linking || working} onclick={() => link(o.rel)}>
+                {linking === o.rel ? "Wird zugeordnet …" : "Zuordnen"}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </section>
     {/if}
 
     {#if onundo && saved.length && undone !== "done"}
@@ -645,6 +708,37 @@
   .ghost.danger { min-height: 34px; padding: 0 12px; font-size: 0.82rem; color: #a23a2a; }
   .ghost.danger:hover { border-color: #a23a2a; }
   .ghost.danger:disabled { opacity: 0.5; cursor: default; }
+
+  /* The manual-assignment list: a genuine escape hatch, so it looks like part of
+     the dialog rather than an error state. */
+  .orphans { margin-top: 14px; }
+  .orphans h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 4px; }
+  .orphans > p { margin: 0 0 8px; color: var(--text-secondary); font-size: 0.84rem; text-wrap: pretty; }
+  .orphans ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .orphans li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    align-items: center;
+    gap: 4px 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-page);
+  }
+  .orphan-doc { font-size: 0.85rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .orphan-file {
+    grid-column: 1;
+    color: var(--text-muted);
+    font-size: 0.76rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .orphans button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+  .ghost.small { min-height: 32px; padding: 0 12px; font-size: 0.82rem; }
 
   .modal-foot { display: flex; justify-content: flex-end; margin-top: 18px; }
 

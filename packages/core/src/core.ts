@@ -564,11 +564,35 @@ export type Charge = {
 
 export type MatchResult = {
   /** a charge linked to one or more invoice PDFs (split); `fx` is set only when
-   *  the link rests on a plausible exchange rate rather than an equal total */
-  matched: { charge: Charge; rows: Row[]; fx?: { currency: string; rate: number } }[];
+   *  the link rests on a plausible exchange rate rather than an equal total, and
+   *  `manual` only when the user drew the link themselves */
+  matched: { charge: Charge; rows: Row[]; fx?: { currency: string; rate: number }; manual?: true }[];
   missing: Charge[];          // on the statement, but no invoice PDF in the folder
   unmatchedInvoices: Row[];   // invoice PDFs in the folder not tied to any charge (informational)
 };
+
+/**
+ * A link the user drew by hand: this Beleg belongs to this booking, whatever the
+ * automatic reading thinks. Stored by value rather than by object identity, because
+ * it has to survive a session reload and every later re-match.
+ */
+export type ManualLink = {
+  /** {@link chargeKey} of the booking. */
+  charge: string;
+  /** display path of the invoice. */
+  rel: string;
+};
+
+/**
+ * Value identity of a charge, for referring to one across re-matches and reloads.
+ * Two charges from the same vendor on the same day for the same amount and with no
+ * transaction id are genuinely indistinguishable here; a manual link then takes the
+ * first of them, which is the best anyone (including the user) can do.
+ */
+export function chargeKey(c: Charge): string {
+  const id = (c as { id?: string }).id ?? "";
+  return `${c.date}|${c.amount.toFixed(2)}|${c.merchant}|${id}`;
+}
 
 /**
  * Drop duplicate statement charges. Two charges are "the same" when provider
@@ -665,10 +689,29 @@ function daysApart(a: string, b: string): number {
  * Among equal-amount candidates, the best provider/merchant token overlap wins,
  * tie-broken by date proximity. Charges with no candidate are reported missing.
  */
-export function matchStatement(charges: Charge[], rows: Row[]): MatchResult {
+export function matchStatement(charges: Charge[], rows: Row[], links: readonly ManualLink[] = []): MatchResult {
   const consumed = new Set<number>();
   const matched: MatchResult["matched"] = [];
   const pending: Charge[] = [];
+  const chargeUsed = new Set<number>();
+
+  // Pass 0 — links the user drew by hand. They outrank every automatic reading,
+  // because they exist precisely for the readings that come out wrong: a total the
+  // PDF prints in a form we misread, a Beleg a week and a half off its booking, a
+  // vendor whose name appears nowhere in the statement text.
+  if (links.length) {
+    const rowByRel = new Map(rows.map((r, i) => [r.rel, i]));
+    const keys = charges.map(chargeKey);
+    for (const link of links) {
+      const ri = rowByRel.get(link.rel);
+      if (ri === undefined || consumed.has(ri)) continue;
+      const ci = keys.findIndex((k, i) => k === link.charge && !chargeUsed.has(i));
+      if (ci < 0) continue;
+      chargeUsed.add(ci);
+      consumed.add(ri);
+      matched.push({ charge: charges[ci], rows: [rows[ri]], manual: true });
+    }
+  }
 
   // Pass 1 — single invoice with an equal total (amount or, for foreign charges,
   // the booked EUR). Build every candidate (charge, invoice) pair, then assign
@@ -700,7 +743,6 @@ export function matchStatement(charges: Charge[], rows: Row[]): MatchResult {
     });
   });
   edges.sort((a, b) => b.score - a.score);
-  const chargeUsed = new Set<number>();
   for (const e of edges) {
     if (chargeUsed.has(e.ci) || consumed.has(e.ri)) continue;
     chargeUsed.add(e.ci); consumed.add(e.ri);

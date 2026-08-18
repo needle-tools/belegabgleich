@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { canon, slug, buildProposed, dedupeNames, dedupeCharges, inferMissing, targetPath, matchStatement, isStatementFile, marketplaceSeller, merchantId, extractFields, groupRelated, findDuplicates, type Row, type Charge, type Groupable } from "./core";
+import { canon, slug, buildProposed, dedupeNames, dedupeCharges, inferMissing, targetPath, matchStatement, isStatementFile, marketplaceSeller, merchantId, extractFields, groupRelated, findDuplicates, chargeKey, type Row, type Charge, type Groupable } from "./core";
 
 // Minimal Row factory for matching tests (only the matched fields matter).
 const row = (p: Partial<Row> & { provider: string; total: string }): Row => ({
@@ -516,6 +516,45 @@ test("isStatementFile matches Kreditkartenabrechnung names, not vendor invoices"
   expect(isStatementFile("Abrechnung_Q1.pdf")).toBe(true);
   expect(isStatementFile("Stromabrechnung_2026.pdf")).toBe(false);
   expect(isStatementFile("2026-05-18_Discourse_invoice_184C7AD0.pdf")).toBe(false);
+});
+
+// --- links the user drew by hand ---
+
+test("matchStatement: a manual link beats the amount, which is the point of it", () => {
+  // The invoice says 16,05 (its own total); the booking is 14,90 because a credit
+  // was applied. No automatic reading can pair these — the user can.
+  const rows = [row({ provider: "GitHub", total: "16.05", currency: "USD", date: "2026-04-22", rel: "gh.pdf" })];
+  const charge: Charge = { date: "2026-05-02", merchant: "GITHUB, INC. GITHUB.COM", amount: 14.9, currency: "USD" };
+  const auto = matchStatement([charge], rows);
+  expect(auto.matched).toHaveLength(0);
+
+  const linked = matchStatement([charge], rows, [{ charge: chargeKey(charge), rel: "gh.pdf" }]);
+  expect(linked.matched).toHaveLength(1);
+  expect(linked.matched[0].manual).toBe(true);
+  expect(linked.missing).toHaveLength(0);
+  expect(linked.unmatchedInvoices).toHaveLength(0);
+});
+
+test("matchStatement: a manual link takes its invoice away from the automatic match", () => {
+  const rows = [row({ provider: "Resend", total: "20.00", currency: "USD", date: "2026-02-15", rel: "r.pdf" })];
+  const feb: Charge = { date: "2026-02-15", merchant: "RESEND RESEND.COM US", amount: 20, currency: "USD" };
+  const jan: Charge = { date: "2026-01-15", merchant: "RESEND RESEND.COM US", amount: 20, currency: "USD" };
+  // Left alone, the invoice goes to the February charge (same date). Told otherwise,
+  // it goes to January and February is the one reported missing.
+  expect(matchStatement([jan, feb], rows).matched[0].charge.date).toBe("2026-02-15");
+  const linked = matchStatement([jan, feb], rows, [{ charge: chargeKey(jan), rel: "r.pdf" }]);
+  expect(linked.matched).toHaveLength(1);
+  expect(linked.matched[0].charge.date).toBe("2026-01-15");
+  expect(linked.missing.map((c) => c.date)).toEqual(["2026-02-15"]);
+});
+
+test("matchStatement: a stale manual link is ignored, not fatal", () => {
+  const rows = [row({ provider: "Hetzner", total: "188.01", rel: "h.pdf" })];
+  const charge: Charge = { date: "2026-03-19", merchant: "HETZNER ONLINE GMBH", amount: 188.01, currency: "EUR" };
+  // Points at a file that is no longer loaded → the automatic match still happens.
+  const r = matchStatement([charge], rows, [{ charge: chargeKey(charge), rel: "weg.pdf" }]);
+  expect(r.matched).toHaveLength(1);
+  expect(r.matched[0].manual).toBeUndefined();
 });
 
 test("matchStatement: one invoice is consumed by only one charge", () => {

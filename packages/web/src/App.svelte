@@ -290,6 +290,35 @@
 
   /** Folder a drop in the open picker would be saved to, for the picker's hint. */
   const pickerTarget = $derived(pickerEntry ? targetFor(pickerEntry) : null);
+
+  /**
+   * Unclaimed Belege worth offering for THIS booking, closest first: same vendor
+   * before anything else, then nearest in date. Capped, because the list is an
+   * offer, not an inventory — "Belege ohne Buchung" below shows them all.
+   */
+  const pickerOrphans = $derived.by(() => {
+    const e = pickerEntry;
+    if (!result || !e || e.status !== "missing") return [];
+    const days = (a: string, b: string) =>
+      /^\d{4}-\d{2}-\d{2}$/.test(a) && /^\d{4}-\d{2}-\d{2}$/.test(b)
+        ? Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000
+        : 999;
+    return [...(result.extras ?? [])]
+      .map((o) => ({ o, same: o.provider === e.provider ? 0 : 1, gap: days(o.date, e.date) }))
+      .sort((a, b) => a.same - b.same || a.gap - b.gap)
+      .slice(0, 5)
+      .map((x) => x.o);
+  });
+
+  /** Record "this Beleg belongs to this booking", whatever the matcher thinks. */
+  async function onLinkManual(entry: ReportEntry, rel: string): Promise<RunResult | null> {
+    if (!result) return null;
+    const { linkManually } = await import("./lib/engine");
+    result = linkManually(result, entry, rel);
+    saveSession(result);
+    track("beleg_linked_manually");
+    return result;
+  }
   // Outcome of the last picker drop, shown in its feedback block.
   let filedTo = $state<string[]>([]);
   let filedExisting = $state<string[]>([]);
@@ -695,6 +724,8 @@
     denied={filedDenied}
     note={filingNote}
     onundo={undoable ? onUndoFiling : undefined}
+    orphans={pickerOrphans}
+    onlink={live ? onLinkManual : undefined}
   />
 {/if}
 

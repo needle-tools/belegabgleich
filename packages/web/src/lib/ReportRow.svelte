@@ -37,7 +37,11 @@
   // A Beleg linked via exchange rate carries a note saying so — surface it, since
   // the amounts on screen (18,15 €) and in the PDF (20 $) won't look alike.
   const matchedTip = $derived(
-    [entry.invoice ? `Zugeordneter Beleg: ${entry.invoice}` : "Ein passender Beleg wurde gefunden", entry.note]
+    [
+      entry.invoice ? `Zugeordneter Beleg: ${entry.invoice}` : "Ein passender Beleg wurde gefunden",
+      entry.manual ? "Von dir zugeordnet — nicht automatisch über Betrag und Datum gefunden" : "",
+      entry.note,
+    ]
       .filter(Boolean)
       .join(" · "),
   );
@@ -83,7 +87,9 @@
         use:tooltip={matchedTip}
       >
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" /></svg>
-        Beleg da
+        <!-- A hand-drawn link says so: "Beleg da" then rests on your judgement, not
+             on an equal total, and that difference matters when you check the list. -->
+        {entry.manual ? "Beleg da · manuell" : "Beleg da"}
       </span>
     {:else if entry.status === "missing"}
       <span class="tag warn" use:tooltip={"Zu dieser Buchung wurde kein Beleg im Ordner gefunden"}>Beleg fehlt</span>
